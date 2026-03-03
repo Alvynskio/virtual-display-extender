@@ -1,0 +1,12 @@
+[package]
+name = "linux-receiver"
+version = "0.1.0"
+edition = "2021"
+description = "GStreamer-based RTP/UDP H.264 receiver for the Virtual Display Extender project"
+
+[dependencies]
+gstreamer = "0.23"
+gstreamer-video = "0.23"
+glib = "0.20"
+ctrlc = { version = "3.4", features = ["termination"] }
+clap = { version = "4", features = ["derive"] }

@@ -1,0 +1,19 @@
+# macOS
+.DS_Store
+
+# Swift / Xcode
+mac-sender/.build/
+mac-sender/.swiftpm/
+*.xcodeproj
+*.xcworkspace
+xcuserdata/
+DerivedData/
+
+# Rust
+linux-receiver/target/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*~
