@@ -5,9 +5,13 @@ struct VirtualDisplayStreamerApp: App {
     @StateObject private var pipeline = StreamingPipeline()
 
     init() {
-        // Handle --test-display flag before launching the full app
+        // Handle test flags before launching the full app
         if CommandLine.arguments.contains("--test-display") {
             testVirtualDisplay()
+            exit(0)
+        }
+        if CommandLine.arguments.contains("--test-capture") {
+            testCapture()
             exit(0)
         }
     }
