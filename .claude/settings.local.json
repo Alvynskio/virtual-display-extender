@@ -3,7 +3,11 @@
     "allow": [
       "Bash(ssh:*)",
       "Bash(git remote:*)",
-      "Bash(git config:*)"
+      "Bash(git config:*)",
+      "Bash(cargo build:*)",
+      "Bash(pkg-config:*)",
+      "Bash(cargo check:*)",
+      "Bash(choco install:*)"
     ]
   }
 }

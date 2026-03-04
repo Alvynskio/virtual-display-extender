@@ -11,6 +11,7 @@ DerivedData/
 
 # Rust
 linux-receiver/target/
+win-sender/target/
 
 # IDE
 .vscode/
