@@ -35,7 +35,7 @@ const CAPTURE_ELEMENTS: &[(&str, &str)] = &[
 ];
 
 /// Find the first available GStreamer element from a list of candidates.
-fn find_available(candidates: &[(&str, &str)]) -> Option<&'static str> {
+fn find_available<'a>(candidates: &[(&str, &'a str)]) -> Option<&'a str> {
     for &(element_name, template) in candidates {
         if gst::ElementFactory::find(element_name).is_some() {
             return Some(template);
