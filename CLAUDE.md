@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Virtual Display Extender streams a virtual second display from a Mac (macOS) to a Linux/Ubuntu machine over the local network via RTP/UDP H.264. It is a two-component system: a Swift macOS menu bar app (sender) and a Rust GStreamer app (receiver).
+Virtual Display Extender streams a virtual second display from a sender machine (macOS or Windows) to a Linux/Ubuntu machine over the local network via RTP/UDP H.264. It is a multi-component system: a Swift macOS menu bar app (mac-sender), a Rust GStreamer app (win-sender), and a Rust GStreamer receiver (linux-receiver).
 
 ## Build & Run
 
@@ -13,6 +13,16 @@ Virtual Display Extender streams a virtual second display from a Mac (macOS) to 
 cd mac-sender
 swift build                          # debug build
 swift run VirtualDisplayStreamer      # run the menu bar app
+```
+
+### Windows sender (Cargo)
+```bash
+cd win-sender
+cargo build --release
+cargo run --release -- --host RECEIVER_IP --monitor 0
+cargo run --release -- --list-monitors              # show available displays
+cargo run --release -- --virtual-display --host IP  # create & stream virtual display
+cargo run --release -- --test-stream                # verification: stream to localhost 5s
 ```
 
 ### Linux receiver (Cargo)
@@ -25,6 +35,7 @@ cargo run --release -- --port 5004 --fullscreen
 
 ### Setup scripts
 - `scripts/setup-mac.sh` — checks macOS version/Xcode, builds mac-sender
+- `scripts/setup-windows.ps1` — checks Rust/GStreamer, builds win-sender (use `-InstallVirtualDisplay` for driver setup)
 - `scripts/setup-linux.sh` — installs GStreamer + Rust deps, builds linux-receiver
 
 ### Phase verification tests (macOS only)
@@ -51,6 +62,16 @@ The pipeline flows: **VirtualDisplay → ScreenCapture → H264Encoder → RTPSt
 
 The `CGVirtualDisplayPrivate` SPM target is an ObjC module that provides headers for private CoreGraphics classes. The `.m` file is intentionally empty — classes are loaded from CoreGraphics at runtime.
 
+### win-sender (Rust, GStreamer)
+
+GStreamer handles the full pipeline: `d3d11screencapturesrc → d3d11convert → mfh264enc → rtph264pay → udpsink`
+
+- `main.rs` — CLI entry point, arg parsing, event loop, Ctrl+C handling (mirrors linux-receiver pattern)
+- `pipeline.rs` — builds GStreamer pipeline string with encoder/capture fallbacks: `mfh264enc` → `nvh264enc` → `x264enc`; `d3d11screencapturesrc` → `dx9screencapsrc`
+- `monitor.rs` — Win32 `EnumDisplayMonitors` to list and select capture targets
+- `virtual_display.rs` — manages IddCx Virtual Display Driver (config writing, device refresh, monitor detection)
+- `config.rs` — `StreamConfig` struct with protocol defaults
+
 ### linux-receiver (Rust)
 
 Single-file app (`src/main.rs`) that builds a GStreamer pipeline from a launch string:
@@ -72,4 +93,6 @@ Defined in `shared/protocol.md`. Key details:
 - macOS sender requires **Screen Recording permission** (System Settings → Privacy & Security)
 - CGVirtualDisplay is a **private API** — no public headers exist; the ObjC bridge in `CGVirtualDisplayPrivate` is reverse-engineered
 - macOS 12.3+ required (ScreenCaptureKit dependency); Swift 5.9+ / `.macOS(.v13)` platform
+- Windows sender requires GStreamer 1.20+ MSVC runtime + dev packages; `d3d11screencapturesrc` needs Windows 10+
+- Windows virtual display requires the [IddCx Virtual Display Driver](https://github.com/itsmikethetech/Virtual-Display-Driver) (optional, for headless use)
 - Linux receiver requires GStreamer 1.20+ with good/ugly/libav plugins installed
