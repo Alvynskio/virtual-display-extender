@@ -36,7 +36,7 @@ fn main() {
             "udpsrc port={port} ",
             "caps=\"application/x-rtp,media=video,encoding-name=H264,",
             "clock-rate=90000,payload=96\" ",
-            "! rtpjitterbuffer latency=50 ",
+            "! rtpjitterbuffer latency=0 ",
             "! rtph264depay ",
             "! avdec_h264 ",
             "! videoconvert ",
