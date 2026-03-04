@@ -14,6 +14,10 @@ struct VirtualDisplayStreamerApp: App {
             testCapture()
             exit(0)
         }
+        if CommandLine.arguments.contains("--test-stream") {
+            testStream()
+            exit(0)
+        }
     }
 
     var body: some Scene {

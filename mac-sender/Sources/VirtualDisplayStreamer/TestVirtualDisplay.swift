@@ -3,6 +3,7 @@ import CoreMedia
 import Foundation
 import CGVirtualDisplayPrivate
 import ScreenCaptureKit
+import Network
 
 /// Standalone test: creates a virtual display and checks if macOS sees it.
 /// Run with: swift run VirtualDisplayStreamer --test-display
@@ -142,6 +143,141 @@ func testCapture() {
         print()
         manager.destroy()
         print("✓ Phase 2 complete")
+
+    } catch {
+        print("✗ Failed: \(error)")
+    }
+}
+
+/// Phase 3 test: full pipeline — virtual display → capture → H.264 encode → RTP/UDP to localhost.
+/// Run with: swift run VirtualDisplayStreamer --test-stream
+func testStream() {
+    print("=== Phase 3: Encode + Stream Test ===")
+    print("Streaming to 127.0.0.1:5004 (localhost)")
+    print()
+
+    let width = 1920
+    let height = 1080
+    let fps = 60
+
+    let manager = VirtualDisplayManager(width: width, height: height, refreshRate: fps)
+
+    do {
+        let displayID = try manager.create()
+        print("✓ Virtual display created (ID: \(displayID))")
+        Thread.sleep(forTimeInterval: 1.0)
+
+        // Set up a UDP listener on localhost to count incoming packets
+        var packetsReceived = 0
+        var bytesReceived = 0
+        let listenerQueue = DispatchQueue(label: "udp-listener")
+        let listener = try NWListener(using: .udp, on: 5004)
+        listener.newConnectionHandler = { connection in
+            connection.start(queue: listenerQueue)
+            func receiveNext() {
+                connection.receiveMessage { data, _, _, _ in
+                    if let data = data {
+                        packetsReceived += 1
+                        bytesReceived += data.count
+                    }
+                    receiveNext()
+                }
+            }
+            receiveNext()
+        }
+        listener.start(queue: listenerQueue)
+
+        // Set up encoder
+        let encoder = H264Encoder(width: width, height: height, fps: fps, bitrateMbps: 15)
+        var naluCount = 0
+        var keyframeCount = 0
+
+        // Set up streamer (to localhost)
+        let streamer = RTPStreamer(host: "127.0.0.1", port: 5004)
+        streamer.start()
+
+        // Wire encoder → streamer
+        try encoder.setup { naluData, isKeyframe, pts in
+            naluCount += 1
+            if isKeyframe { keyframeCount += 1 }
+            streamer.send(naluData: naluData, isLastNALUInFrame: true, timestamp: pts)
+        }
+        print("✓ Encoder created (H.264 High, 15Mbps, CABAC)")
+        print("✓ RTP streamer → 127.0.0.1:5004")
+
+        // Set up capture
+        let captureManager = ScreenCaptureManager(displayID: displayID)
+        var framesCaptured = 0
+        let targetFrames = 180 // ~3 seconds at 60fps
+        let semaphore = DispatchSemaphore(value: 0)
+        let startTime = Date()
+
+        print()
+        print("Capturing + encoding + streaming \(targetFrames) frames...")
+
+        Task {
+            do {
+                try await captureManager.startCapture(
+                    width: width,
+                    height: height,
+                    fps: fps
+                ) { sampleBuffer in
+                    encoder.encode(sampleBuffer: sampleBuffer)
+                    framesCaptured += 1
+
+                    if framesCaptured % 60 == 0 {
+                        print("  \(framesCaptured) frames → \(naluCount) NALUs → \(packetsReceived) RTP packets (\(bytesReceived / 1024) KB)")
+                    }
+
+                    if framesCaptured >= targetFrames {
+                        Task {
+                            try? await captureManager.stopCapture()
+                            semaphore.signal()
+                        }
+                    }
+                }
+            } catch {
+                print("✗ Capture failed: \(error)")
+                semaphore.signal()
+            }
+        }
+
+        let result = semaphore.wait(timeout: .now() + 15.0)
+        let elapsed = Date().timeIntervalSince(startTime)
+
+        // Give a moment for final packets to arrive
+        Thread.sleep(forTimeInterval: 0.5)
+
+        if result == .timedOut {
+            print("⚠ Timed out (got \(framesCaptured) frames)")
+        }
+
+        print()
+        print("=== Results ===")
+        print("  Frames captured:  \(framesCaptured)")
+        print("  NALUs encoded:    \(naluCount) (\(keyframeCount) keyframes)")
+        print("  RTP packets sent: \(packetsReceived)")
+        print("  Data sent:        \(bytesReceived / 1024) KB (\(String(format: "%.1f", Double(bytesReceived) * 8.0 / elapsed / 1_000_000)) Mbps)")
+        print("  Duration:         \(String(format: "%.2f", elapsed))s")
+        print("  Capture FPS:      \(String(format: "%.1f", Double(framesCaptured) / elapsed))")
+
+        if packetsReceived > 0 && naluCount > 0 {
+            print()
+            print("✓ Full pipeline working: capture → encode → RTP/UDP")
+        } else if naluCount > 0 {
+            print()
+            print("⚠ Encoding works but no packets received on localhost")
+        } else {
+            print()
+            print("✗ Encoder produced no NALUs")
+        }
+
+        // Cleanup
+        streamer.stop()
+        encoder.teardown()
+        listener.cancel()
+        manager.destroy()
+        print("✓ Phase 3 complete")
 
     } catch {
         print("✗ Failed: \(error)")
