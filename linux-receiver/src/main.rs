@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use clap::Parser;
 use gstreamer as gst;
+use gstreamer_video::prelude::VideoOverlayExt;
 use gstreamer::prelude::*;
 
 /// Virtual Display Extender - Linux Receiver
