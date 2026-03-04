@@ -8,7 +8,7 @@ const ENCODERS: &[(&str, &str)] = &[
     // Media Foundation (Intel/AMD/Nvidia via MF)
     (
         "mfh264enc",
-        "mfh264enc bitrate={bitrate} rc-mode=cbr low-latency=true cabac=true bframes=0 gop-size={gop}",
+        "mfh264enc bitrate={bitrate_kbps} rc-mode=cbr low-latency=true cabac=true bframes=0 gop-size={gop}",
     ),
     // Nvidia NVENC
     (
