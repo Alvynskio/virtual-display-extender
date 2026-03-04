@@ -8,7 +8,7 @@ const ENCODERS: &[(&str, &str)] = &[
     // Media Foundation (Intel/AMD/Nvidia via MF)
     (
         "mfh264enc",
-        "mfh264enc bitrate={bitrate_kbps} rc-mode=cbr low-latency=true cabac=true bframes=0 gop-size={gop}",
+        "mfh264enc bitrate={bitrate_kbps} rc-mode=cbr low-latency=true cabac=true bframes=0 gop-size={gop} quality-vs-speed=0",
     ),
     // Nvidia NVENC
     (
@@ -26,7 +26,7 @@ const ENCODERS: &[(&str, &str)] = &[
 const CAPTURE_ELEMENTS: &[(&str, &str)] = &[
     (
         "d3d11screencapturesrc",
-        "d3d11screencapturesrc monitor-index={monitor} ! video/x-raw(memory:D3D11Memory),framerate={fps}/1 ! d3d11convert",
+        "d3d11screencapturesrc monitor-index={monitor} show-cursor=true ! video/x-raw(memory:D3D11Memory),framerate={fps}/1 ! d3d11convert",
     ),
     (
         "dx9screencapsrc",
@@ -54,7 +54,7 @@ pub fn build_pipeline(config: &StreamConfig) -> Result<(gst::Pipeline, String), 
     let encoder_template = find_available(ENCODERS)
         .ok_or("No H.264 encoder found. Install GStreamer ugly/bad plugins or x264.")?;
 
-    let gop = config.fps; // 1 keyframe per second
+    let gop = config.fps / 2; // 2 keyframes per second for lower latency
     let bitrate_kbps = config.bitrate / 1000;
 
     let capture_part = capture_template
@@ -67,7 +67,7 @@ pub fn build_pipeline(config: &StreamConfig) -> Result<(gst::Pipeline, String), 
         .replace("{gop}", &gop.to_string());
 
     let pipeline_str = format!(
-        "{capture} ! {encoder} ! video/x-h264,profile=high ! rtph264pay config-interval=-1 mtu=1200 pt=96 ! udpsink host={host} port={port} sync=false",
+        "{capture} ! {encoder} ! video/x-h264,profile=high ! rtph264pay config-interval=-1 mtu=1200 pt=96 ! udpsink host={host} port={port} sync=false async=false buffer-size=0",
         capture = capture_part,
         encoder = encoder_part,
         host = config.host,
