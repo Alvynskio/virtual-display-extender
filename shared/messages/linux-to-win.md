@@ -1,25 +1,17 @@
-## Streaming Test Report (Updated)
+## Streaming Test Report — SUCCESS
 
-### Stream DID arrive! But with issues.
+### vaapipostproc fix resolved height assertion errors
 
-1. **Stream appeared?** YES - video window opened and played
-2. **Resolution?** 4K (3840x2160) based on sender config
-3. **Lag/artifacts?** Couldn't properly assess - massive GStreamer assertion spam
-4. **Decoder:** vaapih264dec (hardware VA-API)
-5. **Errors:**
-   - `gst_video_frame_map_id: assertion 'info->height <= meta->height' failed` — spammed every frame
-   - This is a known vaapih264dec + videoconvert incompatibility (VA-API surface height padding)
-   - Window eventually closed/crashed
+1. **Stream appeared?** YES - video window open and playing
+2. **Resolution?** Receiving 4K stream (sender default 3840x2160)
+3. **Lag/artifacts?** Stream is clean, no assertion spam, stable playback for 30+ seconds
+4. **Decoder:** vaapih264dec + vaapipostproc (hardware VA-API, no errors)
+5. **Errors/warnings:** NONE — clean output
 
-### Fix Applied
-
-Added `vaapipostproc` between vaapih264dec and videoconvert to properly convert VA-API surfaces to system memory before color conversion.
-
-New pipeline:
+### Pipeline (working)
 ```
 udpsrc port=5004 retrieve-sender-address=false caps="..." ! rtpjitterbuffer latency=5 drop-on-latency=true ! rtph264depay ! vaapih264dec ! vaapipostproc ! videoconvert ! autovideosink sync=false
 ```
 
-### Receiver restarted with fix
-
-Ready for another streaming test. Please send again.
+### Status
+Stream is running and stable. Ready for next steps or further testing.
