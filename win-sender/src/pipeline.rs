@@ -4,16 +4,17 @@ use gstreamer::prelude::*;
 use crate::config::StreamConfig;
 
 /// Encoder candidates in preference order.
+/// NVENC first — RTX A2000 available and faster than Media Foundation.
 const ENCODERS: &[(&str, &str)] = &[
+    // Nvidia NVENC (preferred — hardware encoder on RTX/Quadro GPUs)
+    (
+        "nvh264enc",
+        "nvh264enc bitrate={bitrate_kbps} rc-mode=cbr preset=p1 tune=ultra-low-latency zerolatency=true repeat-sequence-header=true aud=false bframes=0 gop-size={gop}",
+    ),
     // Media Foundation (Intel/AMD/Nvidia via MF)
     (
         "mfh264enc",
         "mfh264enc bitrate={bitrate_kbps} rc-mode=cbr low-latency=true cabac=true bframes=0 gop-size={gop} quality-vs-speed=0",
-    ),
-    // Nvidia NVENC
-    (
-        "nvh264enc",
-        "nvh264enc bitrate={bitrate_kbps} rc-mode=cbr zerolatency=true bframes=0 gop-size={gop}",
     ),
     // Software fallback
     (
@@ -26,11 +27,11 @@ const ENCODERS: &[(&str, &str)] = &[
 const CAPTURE_ELEMENTS: &[(&str, &str)] = &[
     (
         "d3d11screencapturesrc",
-        "d3d11screencapturesrc monitor-index={monitor} show-cursor=true ! video/x-raw(memory:D3D11Memory),framerate={fps}/1 ! d3d11convert",
+        "d3d11screencapturesrc monitor-index={monitor} show-cursor=true do-timestamp=true ! video/x-raw(memory:D3D11Memory),framerate={fps}/1 ! d3d11convert",
     ),
     (
         "dx9screencapsrc",
-        "dx9screencapsrc monitor={monitor} ! video/x-raw,framerate={fps}/1 ! videoconvert",
+        "dx9screencapsrc monitor={monitor} do-timestamp=true ! video/x-raw,framerate={fps}/1 ! videoconvert",
     ),
 ];
 
@@ -54,7 +55,7 @@ pub fn build_pipeline(config: &StreamConfig) -> Result<(gst::Pipeline, String), 
     let encoder_template = find_available(ENCODERS)
         .ok_or("No H.264 encoder found. Install GStreamer ugly/bad plugins or x264.")?;
 
-    let gop = config.fps / 2; // 2 keyframes per second for lower latency
+    let gop = config.fps; // 1 keyframe per second — direct ethernet has negligible packet loss
     let bitrate_kbps = config.bitrate / 1000;
 
     let capture_part = capture_template

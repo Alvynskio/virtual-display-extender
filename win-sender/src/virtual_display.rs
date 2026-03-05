@@ -43,6 +43,99 @@ pub fn check_driver_installed() -> bool {
     false
 }
 
+/// Extract a value from a simple XML tag like `<Tag>value</Tag>`.
+fn extract_xml_value(xml: &str, tag: &str) -> Option<String> {
+    let open = format!("<{}>", tag);
+    let close = format!("</{}>", tag);
+    let start = xml.find(&open)? + open.len();
+    let end = xml[start..].find(&close)? + start;
+    Some(xml[start..end].trim().to_string())
+}
+
+/// Information about a detected virtual display from the driver config.
+#[derive(Debug, Clone)]
+pub struct VirtualDisplayInfo {
+    /// Monitor index in the system monitor list.
+    pub index: i32,
+    /// Configured width.
+    pub width: u32,
+    /// Configured height.
+    pub height: u32,
+    /// Configured refresh rate.
+    pub refresh_rate: u32,
+}
+
+/// Detect an existing virtual display by reading the driver config and
+/// cross-referencing with active monitors.
+///
+/// Returns `Some(info)` if a virtual display is currently active, `None` otherwise.
+pub fn detect_existing_virtual_display() -> Option<VirtualDisplayInfo> {
+    let config_path = driver_config_dir().join("vdd_settings.xml");
+    let xml = fs::read_to_string(&config_path).ok()?;
+
+    // Check if there's actually a monitor configured (not an empty <Monitors/> tag).
+    if !xml.contains("<Monitor>") {
+        return None;
+    }
+
+    let width: u32 = extract_xml_value(&xml, "Width")?.parse().ok()?;
+    let height: u32 = extract_xml_value(&xml, "Height")?.parse().ok()?;
+    let refresh_rate: u32 = extract_xml_value(&xml, "RefreshRate")?.parse().ok()?;
+
+    // Cross-reference with active monitors to find the virtual display.
+    let monitors = monitor::list_monitors();
+    for m in &monitors {
+        // Virtual displays from IddCx typically don't have a primary flag
+        // and their name often differs from physical displays.
+        // Match by resolution since we know the configured size.
+        if m.width == width && m.height == height && !m.primary {
+            println!(
+                "[VirtualDisplay] Found existing virtual display: {} (index {}, {}x{}@{}Hz)",
+                m.name, m.index, width, height, refresh_rate,
+            );
+            return Some(VirtualDisplayInfo {
+                index: m.index as i32,
+                width,
+                height,
+                refresh_rate,
+            });
+        }
+    }
+
+    // Config exists but no matching monitor is active — driver may be disabled.
+    println!(
+        "[VirtualDisplay] Config found ({}x{}@{}Hz) but no matching active monitor",
+        width, height, refresh_rate,
+    );
+    None
+}
+
+/// Create a virtual monitor, or reuse an existing one if it matches the
+/// requested resolution. If a virtual display exists but with a different
+/// resolution, destroy it first and recreate.
+///
+/// Returns the monitor-index of the virtual display.
+pub fn create_or_reuse_virtual_monitor(width: u32, height: u32, hz: u32) -> Result<i32, String> {
+    if let Some(existing) = detect_existing_virtual_display() {
+        if existing.width == width && existing.height == height {
+            println!(
+                "[VirtualDisplay] Reusing existing virtual display at index {} ({}x{})",
+                existing.index, existing.width, existing.height,
+            );
+            return Ok(existing.index);
+        }
+
+        // Mismatched resolution — destroy and recreate.
+        println!(
+            "[VirtualDisplay] Existing display is {}x{}, need {}x{} — recreating",
+            existing.width, existing.height, width, height,
+        );
+        destroy_virtual_monitor();
+    }
+
+    create_virtual_monitor(width, height, hz)
+}
+
 /// Create a virtual monitor by writing the driver's config file and
 /// triggering a device refresh.
 ///
@@ -94,16 +187,84 @@ pub fn create_virtual_monitor(width: u32, height: u32, hz: u32) -> Result<i32, S
 }
 
 /// Remove the virtual monitor by clearing the driver config and refreshing.
+/// Polls for up to 3 seconds to confirm the monitor was removed.
 pub fn destroy_virtual_monitor() {
     let config_path = driver_config_dir().join("vdd_settings.xml");
-    if config_path.exists() {
-        let empty = r#"<?xml version="1.0" encoding="utf-8"?>
+    if !config_path.exists() {
+        println!("[VirtualDisplay] No config file found, nothing to destroy");
+        return;
+    }
+
+    let monitors_before = monitor::list_monitors();
+    let count_before = monitors_before.len();
+
+    let empty = r#"<?xml version="1.0" encoding="utf-8"?>
 <VddConfig>
   <Monitors/>
 </VddConfig>"#;
-        let _ = fs::write(&config_path, empty);
-        let _ = trigger_driver_refresh();
-        println!("[VirtualDisplay] Virtual monitor removed");
+    let _ = fs::write(&config_path, empty);
+    let _ = trigger_driver_refresh();
+
+    // Poll for monitor removal confirmation (up to 3 seconds).
+    for i in 0..12 {
+        thread::sleep(Duration::from_millis(250));
+        let count_now = monitor::list_monitors().len();
+        if count_now < count_before {
+            println!(
+                "[VirtualDisplay] Virtual monitor removed ({}ms, {} → {} monitors)",
+                (i + 1) * 250,
+                count_before,
+                count_now,
+            );
+            return;
+        }
+    }
+
+    println!(
+        "[VirtualDisplay] Config cleared but monitor count unchanged ({count_before}). \
+         Driver may need manual restart."
+    );
+}
+
+/// Print the current status of the virtual display driver and any active
+/// virtual display.
+pub fn print_status() {
+    println!("=== Virtual Display Driver Status ===\n");
+
+    // Driver installation check.
+    let installed = check_driver_installed();
+    println!("Driver installed: {}", if installed { "yes" } else { "NO" });
+
+    // Config file contents.
+    let config_path = driver_config_dir().join("vdd_settings.xml");
+    if config_path.exists() {
+        println!("Config file: {}", config_path.display());
+        if let Ok(contents) = fs::read_to_string(&config_path) {
+            println!("Config contents:\n{contents}");
+        }
+    } else {
+        println!("Config file: not found");
+    }
+
+    println!();
+
+    // Active monitors.
+    let monitors = monitor::list_monitors();
+    monitor::print_monitors(&monitors);
+
+    println!();
+
+    // Virtual display detection.
+    match detect_existing_virtual_display() {
+        Some(info) => {
+            println!(
+                "Active virtual display: index {}, {}x{}@{}Hz",
+                info.index, info.width, info.height, info.refresh_rate,
+            );
+        }
+        None => {
+            println!("Active virtual display: none detected");
+        }
     }
 }
 

@@ -1,6 +1,8 @@
 mod config;
 mod monitor;
 mod pipeline;
+mod shortcut;
+mod tray;
 mod virtual_display;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -20,7 +22,7 @@ use config::StreamConfig;
 #[command(name = "win-sender", version, about)]
 struct Args {
     /// Receiver IP address.
-    #[arg(long, default_value = "127.0.0.1")]
+    #[arg(long, default_value = "10.0.0.21")]
     host: String,
 
     /// Receiver UDP port for RTP video.
@@ -32,19 +34,19 @@ struct Args {
     monitor: i32,
 
     /// Horizontal resolution (used when creating a virtual display).
-    #[arg(long, default_value_t = 1920)]
+    #[arg(long, default_value_t = 3840)]
     width: u32,
 
     /// Vertical resolution (used when creating a virtual display).
-    #[arg(long, default_value_t = 1080)]
+    #[arg(long, default_value_t = 2160)]
     height: u32,
 
     /// Frames per second.
     #[arg(long, default_value_t = 60)]
     fps: u32,
 
-    /// Target bitrate in bits/s.
-    #[arg(long, default_value_t = 15_000_000)]
+    /// Target bitrate in bits/s (0 = auto-select based on resolution).
+    #[arg(long, default_value_t = 0)]
     bitrate: u32,
 
     /// List available monitors and exit.
@@ -58,12 +60,69 @@ struct Args {
     /// Test mode: stream to localhost, count packets for 5 seconds, then exit.
     #[arg(long)]
     test_stream: bool,
+
+    /// Kill any active virtual display and exit.
+    #[arg(long)]
+    kill_display: bool,
+
+    /// Show virtual display driver status and exit.
+    #[arg(long)]
+    status: bool,
+
+    /// Run as a system tray application.
+    #[arg(long)]
+    tray: bool,
+
+    /// Install a Start Menu shortcut that launches in tray mode.
+    #[arg(long)]
+    install_shortcut: bool,
 }
 
 fn main() {
     let args = Args::parse();
 
-    // -- List monitors ----------------------------------------------------
+    // -- Install shortcut (runs before everything) ------------------------------
+    if args.install_shortcut {
+        match shortcut::install_start_menu_shortcut() {
+            Ok(path) => println!("Shortcut installed: {}", path.display()),
+            Err(e) => eprintln!("Failed to install shortcut: {e}"),
+        }
+        return;
+    }
+
+    // -- Kill display (runs before GStreamer init) -----------------------------
+    if args.kill_display {
+        virtual_display::destroy_virtual_monitor();
+        return;
+    }
+
+    // -- Status (runs before GStreamer init) -----------------------------------
+    if args.status {
+        virtual_display::print_status();
+        return;
+    }
+
+    // -- Tray mode ------------------------------------------------------------
+    if args.tray {
+        let bitrate = if args.bitrate == 0 {
+            StreamConfig::auto_bitrate(args.width, args.height)
+        } else {
+            args.bitrate
+        };
+        let config = StreamConfig {
+            host: args.host.clone(),
+            port: args.port,
+            monitor_index: args.monitor,
+            width: args.width,
+            height: args.height,
+            fps: args.fps,
+            bitrate,
+        };
+        tray::TrayApp::new(config, args.virtual_display).run();
+        return;
+    }
+
+    // -- List monitors --------------------------------------------------------
     let monitors = monitor::list_monitors();
     monitor::print_monitors(&monitors);
 
@@ -71,13 +130,13 @@ fn main() {
         return;
     }
 
-    // -- Init GStreamer ----------------------------------------------------
+    // -- Init GStreamer --------------------------------------------------------
     gst::init().expect("[Sender] Failed to initialise GStreamer");
     println!("[Sender] GStreamer initialised");
 
-    // -- Virtual display (optional) ---------------------------------------
+    // -- Virtual display (optional) -------------------------------------------
     let monitor_index = if args.virtual_display {
-        match virtual_display::create_virtual_monitor(args.width, args.height, args.fps) {
+        match virtual_display::create_or_reuse_virtual_monitor(args.width, args.height, args.fps) {
             Ok(idx) => idx,
             Err(e) => {
                 eprintln!("[Sender] Virtual display error: {e}");
@@ -88,7 +147,13 @@ fn main() {
         args.monitor
     };
 
-    // -- Build config -----------------------------------------------------
+    // -- Build config ---------------------------------------------------------
+    let bitrate = if args.bitrate == 0 {
+        StreamConfig::auto_bitrate(args.width, args.height)
+    } else {
+        args.bitrate
+    };
+
     let config = StreamConfig {
         host: if args.test_stream {
             "127.0.0.1".into()
@@ -100,10 +165,17 @@ fn main() {
         width: args.width,
         height: args.height,
         fps: args.fps,
-        bitrate: args.bitrate,
+        bitrate,
     };
 
-    // -- Build pipeline ---------------------------------------------------
+    println!(
+        "[Sender] Auto-bitrate: {} Mbps for {}x{}",
+        config.bitrate / 1_000_000,
+        config.width,
+        config.height,
+    );
+
+    // -- Build pipeline -------------------------------------------------------
     let (pipeline, description) = match pipeline::build_pipeline(&config) {
         Ok(v) => v,
         Err(e) => {
@@ -117,7 +189,7 @@ fn main() {
 
     println!("[Sender] Using: {description}");
 
-    // -- Start pipeline ---------------------------------------------------
+    // -- Start pipeline -------------------------------------------------------
     pipeline
         .set_state(gst::State::Playing)
         .expect("[Sender] Failed to set pipeline to Playing");
@@ -132,7 +204,7 @@ fn main() {
         config.bitrate / 1000,
     );
 
-    // -- Ctrl+C handling --------------------------------------------------
+    // -- Ctrl+C handling ------------------------------------------------------
     let running = Arc::new(AtomicBool::new(true));
     let running_ctrlc = Arc::clone(&running);
     let has_virtual = args.virtual_display;
@@ -143,7 +215,7 @@ fn main() {
     })
     .expect("[Sender] Failed to set Ctrl+C handler");
 
-    // -- Test mode: run for 5 seconds then exit ---------------------------
+    // -- Test mode: run for 5 seconds then exit -------------------------------
     if args.test_stream {
         println!("[Sender] Test mode: streaming for 5 seconds ...");
         std::thread::sleep(std::time::Duration::from_secs(5));
@@ -152,7 +224,7 @@ fn main() {
         return;
     }
 
-    // -- Main event loop --------------------------------------------------
+    // -- Main event loop ------------------------------------------------------
     let bus = pipeline.bus().expect("[Sender] Pipeline has no bus");
 
     while running.load(Ordering::SeqCst) {

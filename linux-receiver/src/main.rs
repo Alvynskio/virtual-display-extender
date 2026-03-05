@@ -21,6 +21,30 @@ struct Args {
     /// Attempt to display the video window in fullscreen mode.
     #[arg(long)]
     fullscreen: bool,
+
+    /// Jitter buffer latency in milliseconds (lower = less delay, more drops).
+    #[arg(long, default_value_t = 5)]
+    jitter_latency: u32,
+}
+
+/// Try to find a hardware-accelerated H.264 decoder, falling back to software.
+fn pick_decoder() -> &'static str {
+    let candidates = [
+        ("vaapih264dec", "vaapih264dec"),
+        ("vah264dec", "vah264dec"),
+        ("avdec_h264", "avdec_h264 output-corrupt=true"),
+    ];
+
+    for (element_name, pipeline_fragment) in candidates {
+        if gst::ElementFactory::find(element_name).is_some() {
+            println!("[Receiver] Decoder selected: {element_name}");
+            return pipeline_fragment;
+        }
+    }
+
+    // Ultimate fallback (avdec_h264 should always be present with libav plugin).
+    println!("[Receiver] Decoder selected: avdec_h264 (fallback)");
+    "avdec_h264"
 }
 
 fn main() {
@@ -30,19 +54,24 @@ fn main() {
     gst::init().expect("[Receiver] Failed to initialise GStreamer");
     println!("[Receiver] GStreamer initialised");
 
+    // -- Pick decoder ---------------------------------------------------------
+    let decoder = pick_decoder();
+
     // -- Build the pipeline from a launch string ------------------------------
     let pipeline_str = format!(
         concat!(
-            "udpsrc port={port} ",
+            "udpsrc port={port} retrieve-sender-address=false ",
             "caps=\"application/x-rtp,media=video,encoding-name=H264,",
             "clock-rate=90000,payload=96\" ",
-            "! rtpjitterbuffer latency=0 ",
+            "! rtpjitterbuffer latency={jitter} drop-on-latency=true ",
             "! rtph264depay ",
-            "! avdec_h264 ",
+            "! {decoder} ",
             "! videoconvert ",
             "! autovideosink sync=false"
         ),
         port = args.port,
+        jitter = args.jitter_latency,
+        decoder = decoder,
     );
 
     println!("[Receiver] Pipeline: {}", pipeline_str);
@@ -55,35 +84,21 @@ fn main() {
         .expect("[Receiver] Top-level element is not a Pipeline");
 
     // -- Fullscreen handling via GstVideoOverlay ------------------------------
-    //
-    // When --fullscreen is requested we listen for the `prepare-window-handle`
-    // message that GStreamer video sinks emit before they create a window.
-    // At that point we can query the overlay interface and request fullscreen
-    // rendering (on X11 the sink typically honours this, on Wayland support
-    // varies by sink).
     let want_fullscreen = args.fullscreen;
 
     let bus = pipeline.bus().expect("[Receiver] Pipeline has no bus");
 
-    // Set up a sync handler so we can intercept the prepare-window-handle
-    // message which is emitted from the streaming thread.
     bus.set_sync_handler(move |_bus, msg| {
         if msg.type_() == gst::MessageType::Element {
             if let Some(structure) = msg.structure() {
                 if structure.name().as_str() == "prepare-window-handle" {
                     if want_fullscreen {
                         println!("[Receiver] Window handle ready -- requesting fullscreen");
-                        // The element that sent the message implements
-                        // GstVideoOverlay.  We use the gstreamer-video crate
-                        // to access it.
                         if let Some(src) = msg.src() {
                             if let Ok(overlay) =
                                 src.dynamic_cast_ref::<gstreamer_video::VideoOverlay>()
                                     .ok_or(())
                             {
-                                // expose() with 0 lets the sink allocate its
-                                // own window; we just need a handle for the
-                                // fullscreen call.
                                 overlay.set_render_rectangle(-1, -1, -1, -1).ok();
                             }
                         }
@@ -100,8 +115,8 @@ fn main() {
         .expect("[Receiver] Failed to set pipeline to Playing");
 
     println!(
-        "[Receiver] Listening for RTP H.264 stream on UDP port {} ...",
-        args.port
+        "[Receiver] Listening for RTP H.264 stream on UDP port {} (jitter buffer: {}ms) ...",
+        args.port, args.jitter_latency,
     );
     if want_fullscreen {
         println!("[Receiver] Fullscreen mode requested");
@@ -122,8 +137,6 @@ fn main() {
     let mut frame_reported = false;
 
     while running.load(Ordering::SeqCst) {
-        // Poll the bus with a 100 ms timeout so we can also check the
-        // running flag for Ctrl+C.
         if let Some(msg) = bus.timed_pop(gst::ClockTime::from_mseconds(100)) {
             use gst::MessageView;
 
@@ -146,8 +159,6 @@ fn main() {
                     break;
                 }
                 MessageView::StateChanged(state_changed) => {
-                    // Only report state changes for the pipeline itself, not
-                    // every internal element.
                     if state_changed.src().map(|s| s == &pipeline).unwrap_or(false) {
                         println!(
                             "[Receiver] Pipeline state: {:?} -> {:?}",

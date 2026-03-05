@@ -16,7 +16,13 @@
       "Bash(ip addr:*)",
       "Bash(source:*)",
       "Bash(ping:*)",
-      "Bash(pkill:*)"
+      "Bash(pkill:*)",
+      "Bash(cargo run:*)",
+      "Bash(ipconfig:*)",
+      "Bash(arp:*)",
+      "Bash(GST_DEBUG=0 cargo run:*)",
+      "Bash(gst-inspect-1.0 mfh264enc:*)",
+      "Bash(gh release:*)"
     ]
   }
 }
