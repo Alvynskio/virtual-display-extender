@@ -8,7 +8,15 @@
       "Bash(pkg-config:*)",
       "Bash(cargo check:*)",
       "Bash(choco install:*)",
-      "Bash(where:*)"
+      "Bash(where:*)",
+      "Bash(curl:*)",
+      "Bash(dpkg:*)",
+      "Bash(sudo apt-get:*)",
+      "Bash(git pull:*)",
+      "Bash(ip addr:*)",
+      "Bash(source:*)",
+      "Bash(ping:*)",
+      "Bash(pkill:*)"
     ]
   }
 }
