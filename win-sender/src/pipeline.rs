@@ -24,10 +24,11 @@ const ENCODERS: &[(&str, &str)] = &[
 ];
 
 /// Capture element candidates in preference order.
+/// Both end with standard video/x-raw output so any encoder can link.
 const CAPTURE_ELEMENTS: &[(&str, &str)] = &[
     (
         "d3d11screencapturesrc",
-        "d3d11screencapturesrc monitor-index={monitor} show-cursor=true do-timestamp=true ! video/x-raw(memory:D3D11Memory),framerate={fps}/1 ! d3d11convert",
+        "d3d11screencapturesrc monitor-index={monitor} show-cursor=true do-timestamp=true ! video/x-raw(memory:D3D11Memory),framerate={fps}/1 ! d3d11convert ! d3d11download ! videoconvert",
     ),
     (
         "dx9screencapsrc",
