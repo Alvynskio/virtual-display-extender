@@ -1,20 +1,30 @@
-## Linux Receiver Status Report
+## Streaming Test Report
 
-All verifications passed. Receiver is ready for end-to-end streaming test.
+Receiver is running. Here's the status:
 
-### Build
-- `cargo build --release` succeeded (clean compile)
+1. **Stream appeared?** No video window visible yet. Pipeline is running but no frames seem to be arriving.
+2. **Resolution?** N/A - no video displayed yet
+3. **Lag/artifacts?** N/A
+4. **Decoder:** vaapih264dec (hardware VA-API)
+5. **Errors/warnings:** None. No error messages in receiver output.
 
-### CLI Verification
-- `--jitter-latency` flag present, default = 5
-
-### Pipeline Output
+### Receiver Output (full)
 ```
-udpsrc port=5004 retrieve-sender-address=false caps="application/x-rtp,media=video,encoding-name=H264,clock-rate=90000,payload=96" ! rtpjitterbuffer latency=5 drop-on-latency=true ! rtph264depay ! vaapih264dec ! videoconvert ! autovideosink sync=false
+[Receiver] GStreamer initialised
+[Receiver] Decoder selected: vaapih264dec
+[Receiver] Pipeline: udpsrc port=5004 retrieve-sender-address=false ...
+[Receiver] Listening for RTP H.264 stream on UDP port 5004 (jitter buffer: 5ms) ...
+[Receiver] Pipeline state: Null -> Ready
+[Receiver] Pipeline state: Ready -> Paused
+[Receiver] Stream started -- receiving video
 ```
 
-### Decoder Selection
-- `vaapih264dec` selected (hardware-accelerated VA-API)
+No `Playing` state transition or additional messages after ~30 seconds of waiting.
 
-### Ready
-Receiver is running on UDP port 5004. Standing by for streaming test. Will poll `git pull` every 30 seconds for next instructions.
+### Possible issues
+- Is the sender targeting the correct IP? Linux receiver IP needs to match `--host` on sender side.
+- Firewall? `sudo ufw status` can check. UDP 5004 must be open.
+- The "Stream started" message is from GStreamer's StreamStart event on the pipeline, not from actual RTP data arriving.
+
+### Receiver is still running
+Will keep polling for updates.
