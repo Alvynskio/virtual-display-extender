@@ -1,30 +1,25 @@
-## Streaming Test Report
+## Streaming Test Report (Updated)
 
-Receiver is running. Here's the status:
+### Stream DID arrive! But with issues.
 
-1. **Stream appeared?** No video window visible yet. Pipeline is running but no frames seem to be arriving.
-2. **Resolution?** N/A - no video displayed yet
-3. **Lag/artifacts?** N/A
+1. **Stream appeared?** YES - video window opened and played
+2. **Resolution?** 4K (3840x2160) based on sender config
+3. **Lag/artifacts?** Couldn't properly assess - massive GStreamer assertion spam
 4. **Decoder:** vaapih264dec (hardware VA-API)
-5. **Errors/warnings:** None. No error messages in receiver output.
+5. **Errors:**
+   - `gst_video_frame_map_id: assertion 'info->height <= meta->height' failed` — spammed every frame
+   - This is a known vaapih264dec + videoconvert incompatibility (VA-API surface height padding)
+   - Window eventually closed/crashed
 
-### Receiver Output (full)
+### Fix Applied
+
+Added `vaapipostproc` between vaapih264dec and videoconvert to properly convert VA-API surfaces to system memory before color conversion.
+
+New pipeline:
 ```
-[Receiver] GStreamer initialised
-[Receiver] Decoder selected: vaapih264dec
-[Receiver] Pipeline: udpsrc port=5004 retrieve-sender-address=false ...
-[Receiver] Listening for RTP H.264 stream on UDP port 5004 (jitter buffer: 5ms) ...
-[Receiver] Pipeline state: Null -> Ready
-[Receiver] Pipeline state: Ready -> Paused
-[Receiver] Stream started -- receiving video
+udpsrc port=5004 retrieve-sender-address=false caps="..." ! rtpjitterbuffer latency=5 drop-on-latency=true ! rtph264depay ! vaapih264dec ! vaapipostproc ! videoconvert ! autovideosink sync=false
 ```
 
-No `Playing` state transition or additional messages after ~30 seconds of waiting.
+### Receiver restarted with fix
 
-### Possible issues
-- Is the sender targeting the correct IP? Linux receiver IP needs to match `--host` on sender side.
-- Firewall? `sudo ufw status` can check. UDP 5004 must be open.
-- The "Stream started" message is from GStreamer's StreamStart event on the pipeline, not from actual RTP data arriving.
-
-### Receiver is still running
-Will keep polling for updates.
+Ready for another streaming test. Please send again.

@@ -28,7 +28,18 @@ struct Args {
 }
 
 /// Try to find a hardware-accelerated H.264 decoder, falling back to software.
+/// Returns a pipeline fragment that may include a post-processor (e.g. vaapipostproc)
+/// to convert VA-API surfaces before videoconvert.
 fn pick_decoder() -> &'static str {
+    // vaapih264dec outputs VA-API surfaces that cause height-mismatch assertions
+    // in videoconvert; vaapipostproc converts them to system memory properly.
+    if gst::ElementFactory::find("vaapih264dec").is_some()
+        && gst::ElementFactory::find("vaapipostproc").is_some()
+    {
+        println!("[Receiver] Decoder selected: vaapih264dec + vaapipostproc");
+        return "vaapih264dec ! vaapipostproc";
+    }
+
     let candidates = [
         ("vaapih264dec", "vaapih264dec"),
         ("vah264dec", "vah264dec"),
