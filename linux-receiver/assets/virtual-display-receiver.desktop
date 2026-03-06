@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Virtual Display Receiver
+Comment=Receive and display a virtual display stream over the network
+Exec=virtual-display-receiver
+Icon=virtual-display-receiver
+Type=Application
+Categories=Utility;Video;Network;
+Keywords=stream;display;virtual;receiver;rtp;
+StartupNotify=false
+Terminal=false
