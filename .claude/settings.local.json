@@ -22,7 +22,11 @@
       "Bash(arp:*)",
       "Bash(GST_DEBUG=0 cargo run:*)",
       "Bash(gst-inspect-1.0 mfh264enc:*)",
-      "Bash(gh release:*)"
+      "Bash(gh release:*)",
+      "Bash(gh api:*)",
+      "WebFetch(domain:github.com)",
+      "WebSearch",
+      "Bash(cargo update:*)"
     ]
   }
 }
