@@ -5,9 +5,10 @@ use std::time::Duration;
 
 use crate::monitor;
 
-/// Well-known registry path for the IddCx Virtual Display Driver.
+/// Well-known registry path for the IddCx Virtual Display Driver (MttVDD).
+/// The driver registers under Root\DISPLAY with HardwareID "Root\MttVDD".
 const DRIVER_REGISTRY_PATH: &str =
-    r"SYSTEM\CurrentControlSet\Enum\Root\DVDISPLAY";
+    r"SYSTEM\CurrentControlSet\Enum\Root\DISPLAY";
 
 /// Config directory used by the Virtual-Display-Driver (IddCx).
 /// See: https://github.com/itsmikethetech/Virtual-Display-Driver
@@ -25,16 +26,37 @@ pub fn check_driver_installed() -> bool {
         return true;
     }
 
-    // Also check the registry (best-effort, non-fatal on failure).
+    // Check the registry for the MttVDD hardware ID.
     #[cfg(windows)]
     {
         use std::process::Command;
+
+        // Check if any subkey under Root\DISPLAY has HardwareID containing MttVDD.
         let output = Command::new("reg")
-            .args(["query", DRIVER_REGISTRY_PATH])
+            .args(["query", DRIVER_REGISTRY_PATH, "/s", "/f", "MttVDD"])
             .output();
         if let Ok(out) = output {
             if out.status.success() {
-                println!("[VirtualDisplay] Driver registry key found");
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                if stdout.contains("MttVDD") {
+                    println!("[VirtualDisplay] Driver registry key found (MttVDD)");
+                    return true;
+                }
+            }
+        }
+
+        // Fallback: query PnP devices for "Virtual Display Driver".
+        let output = Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-Command",
+                r#"(Get-PnpDevice -FriendlyName 'Virtual Display Driver' -ErrorAction SilentlyContinue) -ne $null"#,
+            ])
+            .output();
+        if let Ok(out) = output {
+            let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if stdout == "True" {
+                println!("[VirtualDisplay] Driver found via PnP device query");
                 return true;
             }
         }
@@ -153,6 +175,10 @@ pub fn create_virtual_monitor(width: u32, height: u32, hz: u32) -> Result<i32, S
 
     // Write a config that adds one virtual display at the requested resolution.
     let config_dir = driver_config_dir();
+    if !config_dir.is_dir() {
+        fs::create_dir_all(&config_dir)
+            .map_err(|e| format!("Failed to create config dir {}: {e}", config_dir.display()))?;
+    }
     let config_path = config_dir.join("vdd_settings.xml");
 
     let config_content = format!(
@@ -270,23 +296,34 @@ pub fn print_status() {
 
 /// Trigger the IddCx driver to re-read its config by toggling the device.
 fn trigger_driver_refresh() -> Result<(), String> {
-    // Use devcon or pnputil to restart the device. Fall back to a simple
-    // approach: disable then enable the device via PowerShell.
+    // Disable then enable the device via PowerShell so the driver re-reads its config.
     let output = std::process::Command::new("powershell")
         .args([
             "-NoProfile",
             "-Command",
             r#"
-$dev = Get-PnpDevice | Where-Object { $_.FriendlyName -like '*Virtual Display*' -or $_.FriendlyName -like '*IddSample*' } | Select-Object -First 1
+$dev = Get-PnpDevice -FriendlyName 'Virtual Display Driver' -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not $dev) {
+    $dev = Get-PnpDevice | Where-Object { $_.FriendlyName -like '*Virtual Display*' -or $_.HardwareID -contains 'Root\MttVDD' } | Select-Object -First 1
+}
 if ($dev) {
+    Write-Host "Found device: $($dev.FriendlyName) ($($dev.InstanceId)) Status=$($dev.Status)"
     Disable-PnpDevice -InstanceId $dev.InstanceId -Confirm:$false -ErrorAction SilentlyContinue
     Start-Sleep -Milliseconds 500
     Enable-PnpDevice -InstanceId $dev.InstanceId -Confirm:$false -ErrorAction SilentlyContinue
+    Write-Host "Device toggled"
+} else {
+    Write-Host "No virtual display device found"
 }
 "#,
         ])
         .output()
         .map_err(|e| format!("Failed to run PowerShell for driver refresh: {e}"))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if !stdout.is_empty() {
+        println!("[VirtualDisplay] {}", stdout.trim());
+    }
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

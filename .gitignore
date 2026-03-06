@@ -18,3 +18,7 @@ win-sender/target/
 .idea/
 *.swp
 *~
+
+# Temp / tool artifacts
+.tmp/
+.claude/
