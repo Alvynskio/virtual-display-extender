@@ -1,18 +1,21 @@
+mod pipeline;
+mod tray;
+
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::sync::Arc;
 
 use clap::Parser;
 use gstreamer as gst;
-use gstreamer_video::prelude::VideoOverlayExt;
 use gstreamer::prelude::*;
+use gstreamer_video::prelude::VideoOverlayExt;
 
 /// Virtual Display Extender - Linux Receiver
 ///
-/// Receives an RTP/UDP H.264 video stream from the macOS sender and renders it
-/// using GStreamer. Designed to display a virtual second display fullscreen on
-/// a Linux/Ubuntu machine connected over the local network.
+/// Receives an RTP/UDP H.264 video stream and renders it using GStreamer.
+/// Runs as a system tray application by default.
 #[derive(Parser, Debug)]
-#[command(name = "linux-receiver", version, about)]
+#[command(name = "virtual-display-receiver", version, about)]
 struct Args {
     /// UDP port to listen on for incoming RTP packets.
     #[arg(long, default_value_t = 5004)]
@@ -25,50 +28,136 @@ struct Args {
     /// Jitter buffer latency in milliseconds (lower = less delay, more drops).
     #[arg(long, default_value_t = 5)]
     jitter_latency: u32,
+
+    /// Run in CLI mode without the system tray (headless / SSH use).
+    #[arg(long)]
+    cli: bool,
 }
 
-/// Try to find a hardware-accelerated H.264 decoder, falling back to software.
-/// Returns a pipeline fragment that may include a post-processor (e.g. vaapipostproc)
-/// to convert VA-API surfaces before videoconvert.
-fn pick_decoder() -> &'static str {
-    // vaapih264dec outputs VA-API surfaces that cause height-mismatch assertions
-    // in videoconvert; vaapipostproc converts them to system memory properly.
-    if gst::ElementFactory::find("vaapih264dec").is_some()
-        && gst::ElementFactory::find("vaapipostproc").is_some()
-    {
-        println!("[Receiver] Decoder selected: vaapih264dec + vaapipostproc");
-        return "vaapih264dec ! vaapipostproc";
-    }
-
-    let candidates = [
-        ("vaapih264dec", "vaapih264dec"),
-        ("vah264dec", "vah264dec"),
-        ("avdec_h264", "avdec_h264 output-corrupt=true"),
-    ];
-
-    for (element_name, pipeline_fragment) in candidates {
-        if gst::ElementFactory::find(element_name).is_some() {
-            println!("[Receiver] Decoder selected: {element_name}");
-            return pipeline_fragment;
-        }
-    }
-
-    // Ultimate fallback (avdec_h264 should always be present with libav plugin).
-    println!("[Receiver] Decoder selected: avdec_h264 (fallback)");
-    "avdec_h264"
+#[derive(Debug)]
+pub enum AppEvent {
+    StartStop,
+    FullscreenToggled,
+    Quit,
+    PipelineStarted,
+    StreamReceiving,
+    PipelineStopped,
+    PipelineError(String),
 }
 
 fn main() {
     let args = Args::parse();
 
-    // -- Initialise GStreamer --------------------------------------------------
     gst::init().expect("[Receiver] Failed to initialise GStreamer");
     println!("[Receiver] GStreamer initialised");
 
-    // -- Pick decoder ---------------------------------------------------------
-    let decoder = pick_decoder();
+    if args.cli {
+        cli_mode(args);
+    } else {
+        tray_mode(args);
+    }
+}
 
-    // -- Build the pipeline from a launch string ------------------------------
+fn tray_mode(args: Args) {
+    use ksni::blocking::TrayMethods;
+
+    let (event_tx, event_rx) = mpsc::channel();
+
+    let tray_obj =
+        tray::ReceiverTray::new(event_tx.clone(), args.port, args.fullscreen, args.jitter_latency);
+
+    let handle = match tray_obj.spawn() {
+        Ok(h) => h,
+        Err(e) => {
+            eprintln!("[Receiver] Failed to start system tray: {e}");
+            eprintln!("[Receiver] Falling back to CLI mode. Install a StatusNotifierItem host");
+            eprintln!("[Receiver]   (e.g. GNOME extension 'AppIndicator') or use --cli.");
+            cli_mode(args);
+            return;
+        }
+    };
+
+    println!(
+        "[Receiver] System tray started (port: {}, fullscreen: {})",
+        args.port, args.fullscreen
+    );
+
+    let mut pipeline_handle: Option<pipeline::PipelineHandle> = None;
+
+    loop {
+        let event = match event_rx.recv() {
+            Ok(e) => e,
+            Err(_) => break,
+        };
+
+        match event {
+            AppEvent::StartStop => {
+                if pipeline_handle.is_some() {
+                    println!("[Receiver] Stopping receiver...");
+                    let ph = pipeline_handle.take().unwrap();
+                    ph.stop();
+                    handle.update(|tray| {
+                        tray.state = tray::ReceiverState::Idle;
+                    });
+                } else {
+                    let (port, fullscreen, jitter) = {
+                        let mut port = args.port;
+                        let mut fullscreen = args.fullscreen;
+                        let mut jitter = args.jitter_latency;
+                        handle.update(|tray| {
+                            port = tray.port;
+                            fullscreen = tray.fullscreen;
+                            jitter = tray.jitter_latency;
+                            tray.state = tray::ReceiverState::Running;
+                        });
+                        (port, fullscreen, jitter)
+                    };
+                    println!("[Receiver] Starting receiver on port {}...", port);
+                    let ph = pipeline::start(port, fullscreen, jitter, event_tx.clone());
+                    pipeline_handle = Some(ph);
+                }
+            }
+            AppEvent::FullscreenToggled => {}
+            AppEvent::PipelineStarted => {
+                handle.update(|tray| {
+                    tray.state = tray::ReceiverState::Running;
+                });
+            }
+            AppEvent::StreamReceiving => {
+                handle.update(|tray| {
+                    tray.state = tray::ReceiverState::Receiving;
+                });
+            }
+            AppEvent::PipelineStopped => {
+                pipeline_handle = None;
+                handle.update(|tray| {
+                    tray.state = tray::ReceiverState::Idle;
+                });
+            }
+            AppEvent::PipelineError(msg) => {
+                eprintln!("[Receiver] Pipeline error: {msg}");
+                pipeline_handle = None;
+                handle.update(|tray| {
+                    tray.state = tray::ReceiverState::Idle;
+                });
+            }
+            AppEvent::Quit => {
+                println!("[Receiver] Quitting...");
+                if let Some(ph) = pipeline_handle.take() {
+                    ph.stop();
+                }
+                handle.shutdown().wait();
+                break;
+            }
+        }
+    }
+
+    println!("[Receiver] Goodbye.");
+}
+
+fn cli_mode(args: Args) {
+    let decoder = pick_decoder_cli();
+
     let pipeline_str = format!(
         concat!(
             "udpsrc port={port} retrieve-sender-address=false ",
@@ -94,24 +183,19 @@ fn main() {
         .downcast::<gst::Pipeline>()
         .expect("[Receiver] Top-level element is not a Pipeline");
 
-    // -- Fullscreen handling via GstVideoOverlay ------------------------------
     let want_fullscreen = args.fullscreen;
-
     let bus = pipeline.bus().expect("[Receiver] Pipeline has no bus");
 
     bus.set_sync_handler(move |_bus, msg| {
         if msg.type_() == gst::MessageType::Element {
             if let Some(structure) = msg.structure() {
-                if structure.name().as_str() == "prepare-window-handle" {
-                    if want_fullscreen {
-                        println!("[Receiver] Window handle ready -- requesting fullscreen");
-                        if let Some(src) = msg.src() {
-                            if let Ok(overlay) =
-                                src.dynamic_cast_ref::<gstreamer_video::VideoOverlay>()
-                                    .ok_or(())
-                            {
-                                overlay.set_render_rectangle(-1, -1, -1, -1).ok();
-                            }
+                if structure.name().as_str() == "prepare-window-handle" && want_fullscreen {
+                    if let Some(src) = msg.src() {
+                        if let Ok(overlay) = src
+                            .dynamic_cast_ref::<gstreamer_video::VideoOverlay>()
+                            .ok_or(())
+                        {
+                            overlay.set_render_rectangle(-1, -1, -1, -1).ok();
                         }
                     }
                 }
@@ -120,7 +204,6 @@ fn main() {
         gst::BusSyncReply::Pass
     });
 
-    // -- Start the pipeline ---------------------------------------------------
     pipeline
         .set_state(gst::State::Playing)
         .expect("[Receiver] Failed to set pipeline to Playing");
@@ -133,7 +216,6 @@ fn main() {
         println!("[Receiver] Fullscreen mode requested");
     }
 
-    // -- Ctrl+C handling ------------------------------------------------------
     let running = Arc::new(AtomicBool::new(true));
     let running_ctrlc = Arc::clone(&running);
 
@@ -143,7 +225,6 @@ fn main() {
     })
     .expect("[Receiver] Failed to set Ctrl+C handler");
 
-    // -- Main event loop ------------------------------------------------------
     let bus = pipeline.bus().expect("[Receiver] Pipeline has no bus");
     let mut frame_reported = false;
 
@@ -198,10 +279,34 @@ fn main() {
         }
     }
 
-    // -- Clean shutdown -------------------------------------------------------
     println!("[Receiver] Stopping pipeline ...");
     pipeline
         .set_state(gst::State::Null)
         .expect("[Receiver] Failed to set pipeline to Null");
     println!("[Receiver] Pipeline stopped. Goodbye.");
+}
+
+fn pick_decoder_cli() -> &'static str {
+    if gst::ElementFactory::find("vaapih264dec").is_some()
+        && gst::ElementFactory::find("vaapipostproc").is_some()
+    {
+        println!("[Receiver] Decoder selected: vaapih264dec + vaapipostproc");
+        return "vaapih264dec ! vaapipostproc";
+    }
+
+    let candidates = [
+        ("vaapih264dec", "vaapih264dec"),
+        ("vah264dec", "vah264dec"),
+        ("avdec_h264", "avdec_h264 output-corrupt=true"),
+    ];
+
+    for (element_name, pipeline_fragment) in candidates {
+        if gst::ElementFactory::find(element_name).is_some() {
+            println!("[Receiver] Decoder selected: {element_name}");
+            return pipeline_fragment;
+        }
+    }
+
+    println!("[Receiver] Decoder selected: avdec_h264 (fallback)");
+    "avdec_h264"
 }
