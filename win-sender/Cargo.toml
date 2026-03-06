@@ -9,8 +9,8 @@ gstreamer = "0.23"
 glib = "0.20"
 ctrlc = { version = "3.4", features = ["termination"] }
 clap = { version = "4", features = ["derive"] }
-tray-icon = "0.19"
-tao = { version = "0.31", default-features = false, features = ["rwh_06"] }
+tray-icon = "0.21"
+tao = { version = "0.34", default-features = false, features = ["rwh_06"] }
 
 [dependencies.windows]
 version = "0.58"
