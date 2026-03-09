@@ -22,7 +22,7 @@ struct Args {
     port: u16,
 
     /// Attempt to display the video window in fullscreen mode.
-    #[arg(long)]
+    #[arg(long, default_value_t = true)]
     fullscreen: bool,
 
     /// Jitter buffer latency in milliseconds (lower = less delay, more drops).
