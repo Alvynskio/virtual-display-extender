@@ -1,6 +1,10 @@
 # macOS
 .DS_Store
 
+# Windows
+Thumbs.db
+desktop.ini
+
 # Swift / Xcode
 mac-sender/.build/
 mac-sender/.swiftpm/
@@ -10,8 +14,7 @@ xcuserdata/
 DerivedData/
 
 # Rust
-linux-receiver/target/
-win-sender/target/
+target/
 
 # IDE
 .vscode/
@@ -19,6 +22,15 @@ win-sender/target/
 *.swp
 *~
 
+# Environment
+.env
+.env.*
+
+# Logs
+*.log
+
+# Claude Code
+.claude/
+
 # Temp / tool artifacts
 .tmp/
-.claude/
