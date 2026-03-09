@@ -16,8 +16,7 @@ DESKTOP_DIR="$HOME/.local/share/applications"
 
 mkdir -p "$INSTALL_DIR" "$ICON_DIR" "$DESKTOP_DIR"
 
-cp "$BINARY" "$INSTALL_DIR/virtual-display-receiver"
-chmod +x "$INSTALL_DIR/virtual-display-receiver"
+ln -sf "$BINARY" "$INSTALL_DIR/virtual-display-receiver"
 
 cp "$SCRIPT_DIR/virtual-display-receiver.svg" "$ICON_DIR/virtual-display-receiver.svg"
 
