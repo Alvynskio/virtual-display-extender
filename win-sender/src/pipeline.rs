@@ -34,14 +34,14 @@ const PIPELINE_VARIANTS: &[(&str, &[&str], &str, &str)] = &[
         "x264enc (D3D11 capture)",
         &["d3d11screencapturesrc", "d3d11convert", "d3d11download", "videoconvert", "x264enc"],
         "d3d11screencapturesrc monitor-index={monitor} show-cursor=true do-timestamp=true ! video/x-raw(memory:D3D11Memory),framerate={fps}/1 ! d3d11convert ! d3d11download ! videoconvert",
-        "x264enc bitrate={bitrate_kbps} tune=zerolatency speed-preset=ultrafast bframes=0 key-int-max={gop} cabac=true sliced-threads=true sync-lookahead=0",
+        "x264enc bitrate={bitrate_kbps} tune=zerolatency speed-preset=ultrafast bframes=0 key-int-max={gop} cabac=true",
     ),
     // 5. x264 software (DX9 capture — oldest fallback)
     (
         "x264enc (DX9 capture)",
         &["dx9screencapsrc", "videoconvert", "x264enc"],
         "dx9screencapsrc monitor={monitor} do-timestamp=true ! video/x-raw,framerate={fps}/1 ! videoconvert",
-        "x264enc bitrate={bitrate_kbps} tune=zerolatency speed-preset=ultrafast bframes=0 key-int-max={gop} cabac=true sliced-threads=true sync-lookahead=0",
+        "x264enc bitrate={bitrate_kbps} tune=zerolatency speed-preset=ultrafast bframes=0 key-int-max={gop} cabac=true",
     ),
 ];
 
@@ -62,7 +62,7 @@ pub fn build_pipeline(config: &StreamConfig) -> Result<(gst::Pipeline, String), 
     let (description, capture_template, encoder_template) = find_available_variant()
         .ok_or("No usable capture+encoder combination found. Install GStreamer plugins.")?;
 
-    let gop = config.fps / 2; // keyframe every 0.5s — faster artifact recovery
+    let gop = config.fps / 4; // keyframe every 0.25s — fast artifact recovery on scene changes
     let bitrate_kbps = config.bitrate / 1000;
 
     let capture_part = capture_template
@@ -75,7 +75,7 @@ pub fn build_pipeline(config: &StreamConfig) -> Result<(gst::Pipeline, String), 
         .replace("{gop}", &gop.to_string());
 
     let pipeline_str = format!(
-        "{capture} ! {encoder} ! video/x-h264,profile=high ! rtph264pay config-interval=-1 mtu=1400 pt=96 ! udpsink host={host} port={port} sync=false async=false buffer-size=2097152",
+        "{capture} ! {encoder} ! video/x-h264,profile=high ! rtph264pay config-interval=-1 mtu=1200 pt=96 ! udpsink host={host} port={port} sync=false async=false buffer-size=2097152",
         capture = capture_part,
         encoder = encoder_part,
         host = config.host,

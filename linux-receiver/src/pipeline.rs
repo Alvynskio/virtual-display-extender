@@ -60,7 +60,7 @@ const DECODE_CHAIN_VARIANTS: &[(&str, &[&str], &str)] = &[
     (
         "avdec_h264 (software)",
         &["avdec_h264"],
-        "avdec_h264 output-corrupt=true ! videoconvert ! autovideosink sync=false",
+        "avdec_h264 ! videoconvert ! autovideosink sync=false",
     ),
 ];
 
@@ -116,9 +116,8 @@ fn run_pipeline(
             "udpsrc port={port} buffer-size=4194304 retrieve-sender-address=false ",
             "caps=\"application/x-rtp,media=video,encoding-name=H264,",
             "clock-rate=90000,payload=96\" ",
-            "! rtpjitterbuffer latency={jitter} drop-on-latency=true ",
+            "! rtpjitterbuffer latency={jitter} ",
             "! rtph264depay ",
-            "! queue max-size-buffers=3 leaky=downstream ",
             "! {decode_chain}"
         ),
         port = port,

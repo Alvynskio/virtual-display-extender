@@ -10,7 +10,7 @@ final class RTPStreamer {
     private let ssrc: UInt32
     private let payloadType: UInt8 = 96 // dynamic PT for H.264
     private let clockRate: UInt32 = 90000
-    private let maxPayloadSize = 1400 // bytes, leaving room for headers
+    private let maxPayloadSize = 1200 // bytes, leaving room for headers
 
     let host: String
     let port: UInt16
