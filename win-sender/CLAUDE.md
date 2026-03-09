@@ -2,38 +2,40 @@
 
 ## What was done
 
-Implemented all the performance optimizations you suggested for handling the all-intra high-bitrate stream. Here's what changed:
+Two major improvements to the receiver:
 
-### 1. UDP receive buffer: 4 MB → 32 MB
-- At 500 Mbps, 4 MB fills in ~64ms (fewer than 4 frames at 60fps)
-- 32 MB gives ~512ms of headroom for scheduling jitter
-- Also added a startup check that warns the user if `net.core.rmem_max` is below 32 MB (the kernel silently clamps the socket buffer otherwise)
+### 1. Status window with auto-switching (input-selector pipeline)
+The receiver now shows a window immediately when started, with status text on a black background ("Waiting for stream on port 5004..."). When video buffers arrive, it auto-switches to the live video feed. If the stream drops for 3+ seconds, it switches back to a status screen ("Connection lost. Waiting on port 5004...") and auto-reconnects when buffers resume.
 
-### 2. Post-decoder leaky queue on ALL decode chains
-- `queue max-size-buffers=3 max-size-time=0 max-size-bytes=0 leaky=downstream`
-- Placed AFTER the decoder, BEFORE the sink — drops already-rendered frames only, no H.264 stream corruption
-- Prevents backpressure from the video sink stalling the depayloader/jitter buffer
+This uses GStreamer's `input-selector` element with two branches:
+- Branch 0 (status): `videotestsrc pattern=black ! textoverlay → selector.sink_0`
+- Branch 1 (video): `udpsrc → decoder → videoconvert → selector.sink_1`
+- Output: `input-selector → autovideosink`
 
-### 3. Software decoder tuning (avdec_h264 fallback)
-- `avdec_h264 max-threads=0` — uses all CPU cores for frame-parallel I-frame decoding
-- `videoconvert n-threads=0` — multi-threaded colorspace conversion
+Switching is driven by a pad probe on the video branch that tracks last buffer timestamp.
 
-### 4. Hardware decode chains preserved
-The vaapih264dec and vah264dec paths are still preferred. The decode chain selection order is unchanged — software decode is last resort.
+### 2. Fixed Ubuntu "not responding" dialog (sync=false → sync=true)
+The video sink was set to `sync=false`, which made it render in a tight loop with zero idle time. This starved X11 event processing, so GNOME's window manager thought the window was unresponsive and showed a "not responding" dialog. Changed to `sync=true` — the sink now renders at the natural framerate and has time between frames to respond to WM pings. The rtpjitterbuffer handles timing, so latency impact is minimal.
 
-## Current decode chain priority
-1. `vaapih264dec + vaapipostproc + vaapisink` (full GPU zero-copy)
-2. `vaapih264dec + vaapipostproc + autovideosink`
-3. `vaapih264dec + autovideosink`
-4. `vah264dec + autovideosink`
-5. `avdec_h264 max-threads=0` (software fallback)
+### Other tweaks
+- Leaky queue reduced from 3 → 2 buffers (slightly lower latency)
+- `enable-last-sample=false` on all sinks to reduce overhead
+- Decode-only chain variants added (no sink) for input-selector pipeline; full chains kept for CLI mode
+
+## Current pipeline architecture (tray mode)
+```
+videotestsrc → textoverlay → selector.sink_0
+udpsrc → jitterbuffer → depay → {decoder} → queue(leaky) → videoconvert → selector.sink_1
+input-selector name=selector → autovideosink sync=true
+```
+
+Note: the tray-mode pipeline uses `autovideosink` for all decode chains (including VAAPI) because `input-selector` requires `video/x-raw` caps from both branches. CLI mode still uses the full chains with `vaapisink` for zero-copy where available.
 
 ## Status
 - Builds clean (`cargo build --release`)
 - Committed to main
-- User still needs to run `sudo sysctl -w net.core.rmem_max=33554432 net.core.rmem_default=33554432` on the receiver machine (the app now warns about this at startup)
+- No changes needed on the sender side — the receiver handles everything
 
-## If you need anything else from the receiver side
-The receiver is ready for testing. If you observe issues, consider:
-- Reducing bitrate if the network can't sustain 500 Mbps (gigabit LAN should be fine)
-- The jitter buffer is at 40ms by default (configurable via `--jitter-latency`)
+## If you need anything
+- The 3-second stream timeout is hardcoded (`STREAM_TIMEOUT_MS`). If sender-side pauses between streams are shorter, the receiver might briefly flash the status screen. Let us know if this needs tuning.
+- If you notice latency increased noticeably after the `sync=true` change, we can explore `ts-offset` on the jitter buffer or `max-lateness` on the sink.
