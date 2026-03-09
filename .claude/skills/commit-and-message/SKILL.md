@@ -11,10 +11,14 @@ Commit the current changes and write a CLAUDE.md message to one or more other co
 
 ## Step 1: Determine context
 
-Figure out which component you are currently working in by checking the working directory:
-- `linux-receiver/` → you are **linux-receiver**
-- `win-sender/` → you are **win-sender**
-- `mac-sender/` → you are **mac-sender**
+Figure out which component you are currently working in. Check `git diff` and `git status` to see which files were changed — the component with the most changes is the sender of the message.
+
+- Changes in `linux-receiver/` → you are **linux-receiver**
+- Changes in `win-sender/` → you are **win-sender**
+- Changes in `mac-sender/` → you are **mac-sender**
+- Changes span multiple components or are in the repo root → you are the **repo root**; mention which components were touched
+
+If the source is still ambiguous (e.g. only root-level files changed, or equal changes across components), ask the user which component they're working as.
 
 The other components are the message recipients. Determine which ones to message based on:
 - If the changes are relevant to a specific sender/receiver, message only that one
