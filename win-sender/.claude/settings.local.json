@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gst-inspect-1.0 nvh264enc:*)",
+      "Bash(gst-inspect-1.0 d3d11screencapturesrc:*)",
+      "Bash(cargo run:*)",
+      "Bash(GST_DEBUG=3 cargo run:*)",
+      "Bash(reg query:*)",
+      "Bash(powershell:*)"
+    ]
+  },
+  "outputStyle": "Learning"
+}
