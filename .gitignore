@@ -29,8 +29,9 @@ target/
 # Logs
 *.log
 
-# Claude Code
-.claude/
+# Claude Code (ignore everything except shared skills)
+.claude/*
+!.claude/skills/
 
 # Temp / tool artifacts
 .tmp/
