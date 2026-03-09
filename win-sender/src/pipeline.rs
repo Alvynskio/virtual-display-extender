@@ -13,35 +13,35 @@ const PIPELINE_VARIANTS: &[(&str, &[&str], &str, &str)] = &[
         "nvh264enc (CUDA zero-copy)",
         &["d3d11screencapturesrc", "d3d11convert", "cudaupload", "cudaconvert", "nvh264enc"],
         "d3d11screencapturesrc monitor-index={monitor} show-cursor=true do-timestamp=true ! video/x-raw(memory:D3D11Memory),framerate={fps}/1 ! d3d11convert ! cudaupload ! cudaconvert",
-        "nvh264enc bitrate={bitrate_kbps} rc-mode=cbr preset=p1 tune=ultra-low-latency zerolatency=true repeat-sequence-header=true aud=false bframes=0 gop-size={gop} rc-lookahead=0",
+        "nvh264enc bitrate={bitrate_kbps} rc-mode=cbr preset=p1 tune=ultra-low-latency zerolatency=true repeat-sequence-header=true aud=false bframes=0 gop-size=1 rc-lookahead=0",
     ),
     // 2. NVENC + download fallback (GPU capture → CPU → NVENC)
     (
         "nvh264enc (download fallback)",
         &["d3d11screencapturesrc", "d3d11convert", "d3d11download", "videoconvert", "nvh264enc"],
         "d3d11screencapturesrc monitor-index={monitor} show-cursor=true do-timestamp=true ! video/x-raw(memory:D3D11Memory),framerate={fps}/1 ! d3d11convert ! d3d11download ! videoconvert",
-        "nvh264enc bitrate={bitrate_kbps} rc-mode=cbr preset=p1 tune=ultra-low-latency zerolatency=true repeat-sequence-header=true aud=false bframes=0 gop-size={gop} rc-lookahead=0",
+        "nvh264enc bitrate={bitrate_kbps} rc-mode=cbr preset=p1 tune=ultra-low-latency zerolatency=true repeat-sequence-header=true aud=false bframes=0 gop-size=1 rc-lookahead=0",
     ),
     // 3. Media Foundation (Intel/AMD/Nvidia via MF)
     (
         "mfh264enc",
         &["d3d11screencapturesrc", "d3d11convert", "d3d11download", "videoconvert", "mfh264enc"],
         "d3d11screencapturesrc monitor-index={monitor} show-cursor=true do-timestamp=true ! video/x-raw(memory:D3D11Memory),framerate={fps}/1 ! d3d11convert ! d3d11download ! videoconvert",
-        "mfh264enc bitrate={bitrate_kbps} rc-mode=cbr low-latency=true cabac=true bframes=0 gop-size={gop} quality-vs-speed=0",
+        "mfh264enc bitrate={bitrate_kbps} rc-mode=cbr low-latency=true cabac=true bframes=0 gop-size=1 quality-vs-speed=0",
     ),
     // 4. x264 software (D3D11 capture)
     (
         "x264enc (D3D11 capture)",
         &["d3d11screencapturesrc", "d3d11convert", "d3d11download", "videoconvert", "x264enc"],
         "d3d11screencapturesrc monitor-index={monitor} show-cursor=true do-timestamp=true ! video/x-raw(memory:D3D11Memory),framerate={fps}/1 ! d3d11convert ! d3d11download ! videoconvert",
-        "x264enc bitrate={bitrate_kbps} tune=zerolatency speed-preset=ultrafast bframes=0 key-int-max={gop} cabac=true",
+        "x264enc bitrate={bitrate_kbps} tune=zerolatency speed-preset=ultrafast bframes=0 key-int-max=1 cabac=true",
     ),
     // 5. x264 software (DX9 capture — oldest fallback)
     (
         "x264enc (DX9 capture)",
         &["dx9screencapsrc", "videoconvert", "x264enc"],
         "dx9screencapsrc monitor={monitor} do-timestamp=true ! video/x-raw,framerate={fps}/1 ! videoconvert",
-        "x264enc bitrate={bitrate_kbps} tune=zerolatency speed-preset=ultrafast bframes=0 key-int-max={gop} cabac=true",
+        "x264enc bitrate={bitrate_kbps} tune=zerolatency speed-preset=ultrafast bframes=0 key-int-max=1 cabac=true",
     ),
 ];
 
@@ -62,7 +62,6 @@ pub fn build_pipeline(config: &StreamConfig) -> Result<(gst::Pipeline, String), 
     let (description, capture_template, encoder_template) = find_available_variant()
         .ok_or("No usable capture+encoder combination found. Install GStreamer plugins.")?;
 
-    let gop = config.fps / 4; // keyframe every 0.25s — fast artifact recovery on scene changes
     let bitrate_kbps = config.bitrate / 1000;
 
     let capture_part = capture_template
@@ -71,8 +70,7 @@ pub fn build_pipeline(config: &StreamConfig) -> Result<(gst::Pipeline, String), 
 
     let encoder_part = encoder_template
         .replace("{bitrate}", &config.bitrate.to_string())
-        .replace("{bitrate_kbps}", &bitrate_kbps.to_string())
-        .replace("{gop}", &gop.to_string());
+        .replace("{bitrate_kbps}", &bitrate_kbps.to_string());
 
     let pipeline_str = format!(
         "{capture} ! {encoder} ! video/x-h264,profile=high ! rtph264pay config-interval=-1 mtu=1200 pt=96 ! udpsink host={host} port={port} sync=false async=false buffer-size=2097152",

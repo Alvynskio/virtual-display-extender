@@ -66,8 +66,8 @@ For NALUs > 1200 bytes:
 | Level                | 4.1                      |
 | Entropy coding       | CABAC                    |
 | Rate control         | CBR                      |
-| Target bitrate       | 30 Mbps (1080p) / 60 Mbps (1440p) / 120 Mbps (4K) |
-| Keyframe interval    | 15 frames (4 per second at 60fps) |
+| Target bitrate       | 150 Mbps (1080p) / 250 Mbps (1440p) / 500 Mbps (4K) |
+| Keyframe interval    | 1 (all-intra, every frame is an I-frame) |
 | B-frames             | 0 (low latency)          |
 | Slice mode            | Single slice per frame   |
 | Latency mode         | Real-time                |
