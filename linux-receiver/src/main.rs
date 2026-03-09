@@ -26,7 +26,7 @@ struct Args {
     fullscreen: bool,
 
     /// Jitter buffer latency in milliseconds (lower = less delay, more drops).
-    #[arg(long, default_value_t = 5)]
+    #[arg(long, default_value_t = 20)]
     jitter_latency: u32,
 
     /// Run in CLI mode without the system tray (headless / SSH use).
@@ -160,7 +160,7 @@ fn cli_mode(args: Args) {
 
     let pipeline_str = format!(
         concat!(
-            "udpsrc port={port} retrieve-sender-address=false ",
+            "udpsrc port={port} buffer-size=4194304 retrieve-sender-address=false ",
             "caps=\"application/x-rtp,media=video,encoding-name=H264,",
             "clock-rate=90000,payload=96\" ",
             "! rtpjitterbuffer latency={jitter} drop-on-latency=true ",

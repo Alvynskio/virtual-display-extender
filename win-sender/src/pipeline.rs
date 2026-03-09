@@ -3,44 +3,53 @@ use gstreamer::prelude::*;
 
 use crate::config::StreamConfig;
 
-/// Encoder candidates in preference order.
-/// NVENC first — RTX A2000 available and faster than Media Foundation.
-const ENCODERS: &[(&str, &str)] = &[
-    // Nvidia NVENC (preferred — hardware encoder on RTX/Quadro GPUs)
+/// Unified pipeline variants — each pairs a capture chain with a compatible encoder
+/// so GPU memory types are correct end-to-end.
+///
+/// Fields: (description, required_factories, capture_chain_template, encoder_template)
+const PIPELINE_VARIANTS: &[(&str, &[&str], &str, &str)] = &[
+    // 1. NVENC + CUDA zero-copy (GPU frames stay on GPU the whole way)
     (
-        "nvh264enc",
+        "nvh264enc (CUDA zero-copy)",
+        &["d3d11screencapturesrc", "d3d11convert", "cudaupload", "cudaconvert", "nvh264enc"],
+        "d3d11screencapturesrc monitor-index={monitor} show-cursor=true do-timestamp=true ! video/x-raw(memory:D3D11Memory),framerate={fps}/1 ! d3d11convert ! cudaupload ! cudaconvert",
         "nvh264enc bitrate={bitrate_kbps} rc-mode=cbr preset=p1 tune=ultra-low-latency zerolatency=true repeat-sequence-header=true aud=false bframes=0 gop-size={gop}",
     ),
-    // Media Foundation (Intel/AMD/Nvidia via MF)
+    // 2. NVENC + download fallback (GPU capture → CPU → NVENC)
+    (
+        "nvh264enc (download fallback)",
+        &["d3d11screencapturesrc", "d3d11convert", "d3d11download", "videoconvert", "nvh264enc"],
+        "d3d11screencapturesrc monitor-index={monitor} show-cursor=true do-timestamp=true ! video/x-raw(memory:D3D11Memory),framerate={fps}/1 ! d3d11convert ! d3d11download ! videoconvert",
+        "nvh264enc bitrate={bitrate_kbps} rc-mode=cbr preset=p1 tune=ultra-low-latency zerolatency=true repeat-sequence-header=true aud=false bframes=0 gop-size={gop}",
+    ),
+    // 3. Media Foundation (Intel/AMD/Nvidia via MF)
     (
         "mfh264enc",
+        &["d3d11screencapturesrc", "d3d11convert", "d3d11download", "videoconvert", "mfh264enc"],
+        "d3d11screencapturesrc monitor-index={monitor} show-cursor=true do-timestamp=true ! video/x-raw(memory:D3D11Memory),framerate={fps}/1 ! d3d11convert ! d3d11download ! videoconvert",
         "mfh264enc bitrate={bitrate_kbps} rc-mode=cbr low-latency=true cabac=true bframes=0 gop-size={gop} quality-vs-speed=0",
     ),
-    // Software fallback
+    // 4. x264 software (D3D11 capture)
     (
-        "x264enc",
+        "x264enc (D3D11 capture)",
+        &["d3d11screencapturesrc", "d3d11convert", "d3d11download", "videoconvert", "x264enc"],
+        "d3d11screencapturesrc monitor-index={monitor} show-cursor=true do-timestamp=true ! video/x-raw(memory:D3D11Memory),framerate={fps}/1 ! d3d11convert ! d3d11download ! videoconvert",
+        "x264enc bitrate={bitrate_kbps} tune=zerolatency speed-preset=ultrafast bframes=0 key-int-max={gop} cabac=true",
+    ),
+    // 5. x264 software (DX9 capture — oldest fallback)
+    (
+        "x264enc (DX9 capture)",
+        &["dx9screencapsrc", "videoconvert", "x264enc"],
+        "dx9screencapsrc monitor={monitor} do-timestamp=true ! video/x-raw,framerate={fps}/1 ! videoconvert",
         "x264enc bitrate={bitrate_kbps} tune=zerolatency speed-preset=ultrafast bframes=0 key-int-max={gop} cabac=true",
     ),
 ];
 
-/// Capture element candidates in preference order.
-/// Both end with standard video/x-raw output so any encoder can link.
-const CAPTURE_ELEMENTS: &[(&str, &str)] = &[
-    (
-        "d3d11screencapturesrc",
-        "d3d11screencapturesrc monitor-index={monitor} show-cursor=true do-timestamp=true ! video/x-raw(memory:D3D11Memory),framerate={fps}/1 ! d3d11convert ! d3d11download ! videoconvert",
-    ),
-    (
-        "dx9screencapsrc",
-        "dx9screencapsrc monitor={monitor} do-timestamp=true ! video/x-raw,framerate={fps}/1 ! videoconvert",
-    ),
-];
-
-/// Find the first available GStreamer element from a list of candidates.
-fn find_available<'a>(candidates: &[(&str, &'a str)]) -> Option<&'a str> {
-    for &(element_name, template) in candidates {
-        if gst::ElementFactory::find(element_name).is_some() {
-            return Some(template);
+/// Find the first pipeline variant where ALL required GStreamer element factories exist.
+fn find_available_variant() -> Option<(&'static str, &'static str, &'static str)> {
+    for &(description, required, capture_tpl, encoder_tpl) in PIPELINE_VARIANTS {
+        if required.iter().all(|name| gst::ElementFactory::find(name).is_some()) {
+            return Some((description, capture_tpl, encoder_tpl));
         }
     }
     None
@@ -50,13 +59,10 @@ fn find_available<'a>(candidates: &[(&str, &'a str)]) -> Option<&'a str> {
 ///
 /// Returns the pipeline and a human-readable description of the chosen elements.
 pub fn build_pipeline(config: &StreamConfig) -> Result<(gst::Pipeline, String), String> {
-    let capture_template = find_available(CAPTURE_ELEMENTS)
-        .ok_or("No screen capture element found. Install GStreamer bad/good plugins.")?;
+    let (description, capture_template, encoder_template) = find_available_variant()
+        .ok_or("No usable capture+encoder combination found. Install GStreamer plugins.")?;
 
-    let encoder_template = find_available(ENCODERS)
-        .ok_or("No H.264 encoder found. Install GStreamer ugly/bad plugins or x264.")?;
-
-    let gop = config.fps; // 1 keyframe per second — direct ethernet has negligible packet loss
+    let gop = config.fps / 2; // keyframe every 0.5s — faster artifact recovery
     let bitrate_kbps = config.bitrate / 1000;
 
     let capture_part = capture_template
@@ -69,17 +75,11 @@ pub fn build_pipeline(config: &StreamConfig) -> Result<(gst::Pipeline, String), 
         .replace("{gop}", &gop.to_string());
 
     let pipeline_str = format!(
-        "{capture} ! {encoder} ! video/x-h264,profile=high ! rtph264pay config-interval=-1 mtu=1200 pt=96 ! udpsink host={host} port={port} sync=false async=false buffer-size=0",
+        "{capture} ! {encoder} ! video/x-h264,profile=high ! rtph264pay config-interval=-1 mtu=1200 pt=96 ! udpsink host={host} port={port} sync=false async=false buffer-size=2097152",
         capture = capture_part,
         encoder = encoder_part,
         host = config.host,
         port = config.port,
-    );
-
-    let description = format!(
-        "capture: {}, encoder: {}",
-        capture_template.split_whitespace().next().unwrap_or("?"),
-        encoder_template.split_whitespace().next().unwrap_or("?"),
     );
 
     let pipeline = gst::parse::launch(&pipeline_str)
@@ -89,5 +89,5 @@ pub fn build_pipeline(config: &StreamConfig) -> Result<(gst::Pipeline, String), 
 
     println!("[Sender] Pipeline: {pipeline_str}");
 
-    Ok((pipeline, description))
+    Ok((pipeline, description.to_string()))
 }

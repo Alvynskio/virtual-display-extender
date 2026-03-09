@@ -88,7 +88,7 @@ fn run_pipeline(
 
     let pipeline_str = format!(
         concat!(
-            "udpsrc port={port} retrieve-sender-address=false ",
+            "udpsrc port={port} buffer-size=4194304 retrieve-sender-address=false ",
             "caps=\"application/x-rtp,media=video,encoding-name=H264,",
             "clock-rate=90000,payload=96\" ",
             "! rtpjitterbuffer latency={jitter} drop-on-latency=true ",
