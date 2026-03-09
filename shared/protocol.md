@@ -43,11 +43,11 @@ Standard RTP header (12 bytes) per RFC 3550:
 ## H.264 NAL Unit Packaging (RFC 6184)
 
 ### Single NAL Unit Mode
-For NALUs ≤ 1200 bytes (fits in single UDP packet with headers):
+For NALUs ≤ 1400 bytes (fits in single UDP packet with headers):
 - RTP payload = single NALU (including NAL header byte)
 
 ### Fragmentation Unit (FU-A) Mode
-For NALUs > 1200 bytes:
+For NALUs > 1400 bytes:
 - Split into fragments, each prefixed with FU indicator + FU header
 - FU indicator: `(nal_ref_idc & 0x60) | 28`
 - FU header: `S|E|R|Type` (Start, End, Reserved, original NAL type)
@@ -56,7 +56,7 @@ For NALUs > 1200 bytes:
 ## MTU Considerations
 
 - Target MTU: 1400 bytes (safe for most networks)
-- Max RTP payload: 1200 bytes (leaving room for RTP/UDP/IP headers)
+- Max RTP payload: 1400 bytes (1500 MTU - 20 IP - 8 UDP - 12 RTP = 1460, with margin)
 
 ## Encoder Configuration
 

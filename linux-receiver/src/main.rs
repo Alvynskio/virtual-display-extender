@@ -156,7 +156,7 @@ fn tray_mode(args: Args) {
 }
 
 fn cli_mode(args: Args) {
-    let decoder = pick_decoder_cli();
+    let (_desc, decode_chain) = pipeline::pick_decode_chain();
 
     let pipeline_str = format!(
         concat!(
@@ -165,13 +165,12 @@ fn cli_mode(args: Args) {
             "clock-rate=90000,payload=96\" ",
             "! rtpjitterbuffer latency={jitter} drop-on-latency=true ",
             "! rtph264depay ",
-            "! {decoder} ",
-            "! videoconvert ",
-            "! autovideosink sync=false"
+            "! queue max-size-buffers=3 leaky=downstream ",
+            "! {decode_chain}"
         ),
         port = args.port,
         jitter = args.jitter_latency,
-        decoder = decoder,
+        decode_chain = decode_chain,
     );
 
     println!("[Receiver] Pipeline: {}", pipeline_str);
@@ -286,27 +285,3 @@ fn cli_mode(args: Args) {
     println!("[Receiver] Pipeline stopped. Goodbye.");
 }
 
-fn pick_decoder_cli() -> &'static str {
-    if gst::ElementFactory::find("vaapih264dec").is_some()
-        && gst::ElementFactory::find("vaapipostproc").is_some()
-    {
-        println!("[Receiver] Decoder selected: vaapih264dec + vaapipostproc");
-        return "vaapih264dec ! vaapipostproc";
-    }
-
-    let candidates = [
-        ("vaapih264dec", "vaapih264dec"),
-        ("vah264dec", "vah264dec"),
-        ("avdec_h264", "avdec_h264 output-corrupt=true"),
-    ];
-
-    for (element_name, pipeline_fragment) in candidates {
-        if gst::ElementFactory::find(element_name).is_some() {
-            println!("[Receiver] Decoder selected: {element_name}");
-            return pipeline_fragment;
-        }
-    }
-
-    println!("[Receiver] Decoder selected: avdec_h264 (fallback)");
-    "avdec_h264"
-}

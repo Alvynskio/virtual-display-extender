@@ -32,30 +32,55 @@ impl Drop for PipelineHandle {
     }
 }
 
-/// Try to find a hardware-accelerated H.264 decoder, falling back to software.
-fn pick_decoder() -> &'static str {
-    if gst::ElementFactory::find("vaapih264dec").is_some()
-        && gst::ElementFactory::find("vaapipostproc").is_some()
-    {
-        println!("[Receiver] Decoder selected: vaapih264dec + vaapipostproc");
-        return "vaapih264dec ! vaapipostproc";
-    }
+/// Unified decode-chain variants: decoder + colorspace + sink as one unit.
+/// Each variant keeps frames on the GPU as long as possible.
+///
+/// Fields: (description, required_factories, pipeline_fragment)
+const DECODE_CHAIN_VARIANTS: &[(&str, &[&str], &str)] = &[
+    (
+        "vaapih264dec + vaapisink (full GPU zero-copy)",
+        &["vaapih264dec", "vaapipostproc", "vaapisink"],
+        "vaapih264dec ! vaapipostproc ! vaapisink sync=false",
+    ),
+    (
+        "vaapih264dec + vaapipostproc + autovideosink",
+        &["vaapih264dec", "vaapipostproc"],
+        "vaapih264dec ! vaapipostproc ! videoconvert ! autovideosink sync=false",
+    ),
+    (
+        "vaapih264dec + autovideosink",
+        &["vaapih264dec"],
+        "vaapih264dec ! videoconvert ! autovideosink sync=false",
+    ),
+    (
+        "vah264dec + autovideosink",
+        &["vah264dec"],
+        "vah264dec ! videoconvert ! autovideosink sync=false",
+    ),
+    (
+        "avdec_h264 (software)",
+        &["avdec_h264"],
+        "avdec_h264 output-corrupt=true ! videoconvert ! autovideosink sync=false",
+    ),
+];
 
-    let candidates = [
-        ("vaapih264dec", "vaapih264dec"),
-        ("vah264dec", "vah264dec"),
-        ("avdec_h264", "avdec_h264 output-corrupt=true"),
-    ];
-
-    for (element_name, pipeline_fragment) in candidates {
-        if gst::ElementFactory::find(element_name).is_some() {
-            println!("[Receiver] Decoder selected: {element_name}");
-            return pipeline_fragment;
+/// Pick the best decode → display chain whose GStreamer factories are all available.
+pub fn pick_decode_chain() -> (&'static str, &'static str) {
+    for &(description, required, fragment) in DECODE_CHAIN_VARIANTS {
+        if required
+            .iter()
+            .all(|name| gst::ElementFactory::find(name).is_some())
+        {
+            println!("[Receiver] Decode chain selected: {description}");
+            return (description, fragment);
         }
     }
 
-    println!("[Receiver] Decoder selected: avdec_h264 (fallback)");
-    "avdec_h264"
+    println!("[Receiver] Decode chain selected: avdec_h264 (fallback)");
+    (
+        "avdec_h264 (fallback)",
+        "avdec_h264 ! videoconvert ! autovideosink sync=false",
+    )
 }
 
 pub fn start(
@@ -84,7 +109,7 @@ fn run_pipeline(
     running: &AtomicBool,
     event_tx: &mpsc::Sender<AppEvent>,
 ) {
-    let decoder = pick_decoder();
+    let (_desc, decode_chain) = pick_decode_chain();
 
     let pipeline_str = format!(
         concat!(
@@ -93,13 +118,12 @@ fn run_pipeline(
             "clock-rate=90000,payload=96\" ",
             "! rtpjitterbuffer latency={jitter} drop-on-latency=true ",
             "! rtph264depay ",
-            "! {decoder} ",
-            "! videoconvert ",
-            "! autovideosink sync=false"
+            "! queue max-size-buffers=3 leaky=downstream ",
+            "! {decode_chain}"
         ),
         port = port,
         jitter = jitter_latency,
-        decoder = decoder,
+        decode_chain = decode_chain,
     );
 
     println!("[Receiver] Pipeline: {}", pipeline_str);
