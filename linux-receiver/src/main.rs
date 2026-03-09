@@ -45,11 +45,47 @@ pub enum AppEvent {
     PipelineError(String),
 }
 
+fn check_udp_buffer_sysctl() {
+    let required = pipeline::UDP_BUFFER_SIZE;
+    let path = "/proc/sys/net/core/rmem_max";
+    match std::fs::read_to_string(path) {
+        Ok(contents) => {
+            if let Ok(current) = contents.trim().parse::<u32>() {
+                if current < required {
+                    eprintln!(
+                        "[Receiver] WARNING: net.core.rmem_max = {} ({:.0} MB) is below the \
+                         requested UDP buffer size of {} ({:.0} MB).",
+                        current,
+                        current as f64 / 1_048_576.0,
+                        required,
+                        required as f64 / 1_048_576.0,
+                    );
+                    eprintln!(
+                        "[Receiver] The kernel will clamp the socket buffer. To fix, run:"
+                    );
+                    eprintln!(
+                        "[Receiver]   sudo sysctl -w net.core.rmem_max={required} net.core.rmem_default={required}"
+                    );
+                } else {
+                    println!(
+                        "[Receiver] OS UDP buffer limit: {} MB (OK)",
+                        current / 1_048_576
+                    );
+                }
+            }
+        }
+        Err(_) => {
+            eprintln!("[Receiver] Could not read {path} — unable to verify UDP buffer limits");
+        }
+    }
+}
+
 fn main() {
     let args = Args::parse();
 
     gst::init().expect("[Receiver] Failed to initialise GStreamer");
     println!("[Receiver] GStreamer initialised");
+    check_udp_buffer_sysctl();
 
     if args.cli {
         cli_mode(args);
@@ -160,7 +196,7 @@ fn cli_mode(args: Args) {
 
     let pipeline_str = format!(
         concat!(
-            "udpsrc port={port} buffer-size=4194304 retrieve-sender-address=false ",
+            "udpsrc port={port} buffer-size={buf} retrieve-sender-address=false ",
             "caps=\"application/x-rtp,media=video,encoding-name=H264,",
             "clock-rate=90000,payload=96\" ",
             "! rtpjitterbuffer latency={jitter} ",
@@ -168,6 +204,7 @@ fn cli_mode(args: Args) {
             "! {decode_chain}"
         ),
         port = args.port,
+        buf = pipeline::UDP_BUFFER_SIZE,
         jitter = args.jitter_latency,
         decode_chain = decode_chain,
     );

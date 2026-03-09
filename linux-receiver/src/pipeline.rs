@@ -32,35 +32,62 @@ impl Drop for PipelineHandle {
     }
 }
 
+/// UDP receive buffer size: 32MB to handle 500 Mbps all-intra bursts.
+/// At 500 Mbps, 4MB fills in ~64ms (fewer than 4 frames at 60fps).
+/// 32MB gives ~512ms of buffer — enough to absorb scheduling jitter.
+pub const UDP_BUFFER_SIZE: u32 = 33_554_432;
+
 /// Unified decode-chain variants: decoder + colorspace + sink as one unit.
 /// Each variant keeps frames on the GPU as long as possible.
+/// A post-decoder leaky queue is appended to absorb decode-time variance
+/// without backpressure stalling the depayloader (drops rendered frames only).
 ///
 /// Fields: (description, required_factories, pipeline_fragment)
 const DECODE_CHAIN_VARIANTS: &[(&str, &[&str], &str)] = &[
     (
         "vaapih264dec + vaapisink (full GPU zero-copy)",
         &["vaapih264dec", "vaapipostproc", "vaapisink"],
-        "vaapih264dec ! vaapipostproc ! vaapisink sync=false",
+        concat!(
+            "vaapih264dec ! ",
+            "queue max-size-buffers=3 max-size-time=0 max-size-bytes=0 leaky=downstream ! ",
+            "vaapipostproc ! vaapisink sync=false",
+        ),
     ),
     (
         "vaapih264dec + vaapipostproc + autovideosink",
         &["vaapih264dec", "vaapipostproc"],
-        "vaapih264dec ! vaapipostproc ! videoconvert ! autovideosink sync=false",
+        concat!(
+            "vaapih264dec ! ",
+            "queue max-size-buffers=3 max-size-time=0 max-size-bytes=0 leaky=downstream ! ",
+            "vaapipostproc ! videoconvert ! autovideosink sync=false",
+        ),
     ),
     (
         "vaapih264dec + autovideosink",
         &["vaapih264dec"],
-        "vaapih264dec ! videoconvert ! autovideosink sync=false",
+        concat!(
+            "vaapih264dec ! ",
+            "queue max-size-buffers=3 max-size-time=0 max-size-bytes=0 leaky=downstream ! ",
+            "videoconvert ! autovideosink sync=false",
+        ),
     ),
     (
         "vah264dec + autovideosink",
         &["vah264dec"],
-        "vah264dec ! videoconvert ! autovideosink sync=false",
+        concat!(
+            "vah264dec ! ",
+            "queue max-size-buffers=3 max-size-time=0 max-size-bytes=0 leaky=downstream ! ",
+            "videoconvert ! autovideosink sync=false",
+        ),
     ),
     (
-        "avdec_h264 (software)",
+        "avdec_h264 max-threads (software)",
         &["avdec_h264"],
-        "avdec_h264 ! videoconvert ! autovideosink sync=false",
+        concat!(
+            "avdec_h264 max-threads=0 ! ",
+            "queue max-size-buffers=3 max-size-time=0 max-size-bytes=0 leaky=downstream ! ",
+            "videoconvert n-threads=0 ! autovideosink sync=false",
+        ),
     ),
 ];
 
@@ -113,7 +140,7 @@ fn run_pipeline(
 
     let pipeline_str = format!(
         concat!(
-            "udpsrc port={port} buffer-size=4194304 retrieve-sender-address=false ",
+            "udpsrc port={port} buffer-size={buf} retrieve-sender-address=false ",
             "caps=\"application/x-rtp,media=video,encoding-name=H264,",
             "clock-rate=90000,payload=96\" ",
             "! rtpjitterbuffer latency={jitter} ",
@@ -121,6 +148,7 @@ fn run_pipeline(
             "! {decode_chain}"
         ),
         port = port,
+        buf = UDP_BUFFER_SIZE,
         jitter = jitter_latency,
         decode_chain = decode_chain,
     );
