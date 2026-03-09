@@ -41,6 +41,7 @@ pub enum AppEvent {
     Quit,
     PipelineStarted,
     StreamReceiving,
+    StreamLost,
     PipelineStopped,
     PipelineError(String),
 }
@@ -162,6 +163,11 @@ fn tray_mode(args: Args) {
             AppEvent::StreamReceiving => {
                 handle.update(|tray| {
                     tray.state = tray::ReceiverState::Receiving;
+                });
+            }
+            AppEvent::StreamLost => {
+                handle.update(|tray| {
+                    tray.state = tray::ReceiverState::Running;
                 });
             }
             AppEvent::PipelineStopped => {
