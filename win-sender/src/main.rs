@@ -3,7 +3,6 @@ mod monitor;
 mod pipeline;
 mod shortcut;
 mod tray;
-mod virtual_display;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -16,8 +15,8 @@ use config::StreamConfig;
 
 /// Virtual Display Extender - Windows Sender
 ///
-/// Captures a display (real or virtual) and streams it as RTP/UDP H.264 to
-/// the linux-receiver. Uses GStreamer for capture, encoding, and RTP packetization.
+/// Captures a display and streams it as RTP/UDP H.264 to the linux-receiver.
+/// Uses GStreamer for capture, encoding, and RTP packetization.
 #[derive(Parser, Debug)]
 #[command(name = "win-sender", version, about)]
 struct Args {
@@ -30,22 +29,14 @@ struct Args {
     port: u16,
 
     /// Monitor index to capture (use --list-monitors to see available).
-    #[arg(long, default_value_t = 0)]
+    #[arg(short, long, default_value_t = 0)]
     monitor: i32,
-
-    /// Horizontal resolution (used when creating a virtual display).
-    #[arg(long, default_value_t = 3840)]
-    width: u32,
-
-    /// Vertical resolution (used when creating a virtual display).
-    #[arg(long, default_value_t = 2160)]
-    height: u32,
 
     /// Frames per second.
     #[arg(long, default_value_t = 60)]
     fps: u32,
 
-    /// Target bitrate in bits/s (0 = auto-select based on resolution).
+    /// Target bitrate in bits/s (0 = auto-select based on monitor resolution).
     #[arg(long, default_value_t = 0)]
     bitrate: u32,
 
@@ -53,21 +44,9 @@ struct Args {
     #[arg(long)]
     list_monitors: bool,
 
-    /// Create a virtual display and capture it (requires IddCx driver).
-    #[arg(long)]
-    virtual_display: bool,
-
     /// Test mode: stream to localhost, count packets for 5 seconds, then exit.
     #[arg(long)]
     test_stream: bool,
-
-    /// Kill any active virtual display and exit.
-    #[arg(long)]
-    kill_display: bool,
-
-    /// Show virtual display driver status and exit.
-    #[arg(long)]
-    status: bool,
 
     /// Run as a system tray application.
     #[arg(long)]
@@ -90,38 +69,6 @@ fn main() {
         return;
     }
 
-    // -- Kill display (runs before GStreamer init) -----------------------------
-    if args.kill_display {
-        virtual_display::destroy_virtual_monitor();
-        return;
-    }
-
-    // -- Status (runs before GStreamer init) -----------------------------------
-    if args.status {
-        virtual_display::print_status();
-        return;
-    }
-
-    // -- Tray mode ------------------------------------------------------------
-    if args.tray {
-        let bitrate = if args.bitrate == 0 {
-            StreamConfig::auto_bitrate(args.width, args.height)
-        } else {
-            args.bitrate
-        };
-        let config = StreamConfig {
-            host: args.host.clone(),
-            port: args.port,
-            monitor_index: args.monitor,
-            width: args.width,
-            height: args.height,
-            fps: args.fps,
-            bitrate,
-        };
-        tray::TrayApp::new(config, args.virtual_display).run();
-        return;
-    }
-
     // -- List monitors --------------------------------------------------------
     let monitors = monitor::list_monitors();
     monitor::print_monitors(&monitors);
@@ -130,30 +77,36 @@ fn main() {
         return;
     }
 
-    // -- Init GStreamer --------------------------------------------------------
-    gst::init().expect("[Sender] Failed to initialise GStreamer");
-    println!("[Sender] GStreamer initialised");
-
-    // -- Virtual display (optional) -------------------------------------------
-    let monitor_index = if args.virtual_display {
-        match virtual_display::create_or_reuse_virtual_monitor(args.width, args.height, args.fps) {
-            Ok(idx) => idx,
-            Err(e) => {
-                eprintln!("[Sender] Virtual display error: {e}");
-                std::process::exit(1);
-            }
-        }
-    } else {
-        args.monitor
-    };
-
-    // -- Build config ---------------------------------------------------------
+    // -- Resolve bitrate from monitor resolution ------------------------------
     let bitrate = if args.bitrate == 0 {
-        StreamConfig::auto_bitrate(args.width, args.height)
+        let (w, h) = monitors
+            .iter()
+            .find(|m| m.index == args.monitor as usize)
+            .map(|m| (m.width, m.height))
+            .unwrap_or((3840, 2160));
+        StreamConfig::auto_bitrate(w, h)
     } else {
         args.bitrate
     };
 
+    // -- Tray mode ------------------------------------------------------------
+    if args.tray {
+        let config = StreamConfig {
+            host: args.host.clone(),
+            port: args.port,
+            monitor_index: args.monitor,
+            fps: args.fps,
+            bitrate,
+        };
+        tray::TrayApp::new(config).run();
+        return;
+    }
+
+    // -- Init GStreamer --------------------------------------------------------
+    gst::init().expect("[Sender] Failed to initialise GStreamer");
+    println!("[Sender] GStreamer initialised");
+
+    // -- Build config ---------------------------------------------------------
     let config = StreamConfig {
         host: if args.test_stream {
             "127.0.0.1".into()
@@ -161,18 +114,14 @@ fn main() {
             args.host.clone()
         },
         port: args.port,
-        monitor_index,
-        width: args.width,
-        height: args.height,
+        monitor_index: args.monitor,
         fps: args.fps,
         bitrate,
     };
 
     println!(
-        "[Sender] Auto-bitrate: {} Mbps for {}x{}",
+        "[Sender] Bitrate: {} Mbps",
         config.bitrate / 1_000_000,
-        config.width,
-        config.height,
     );
 
     // -- Build pipeline -------------------------------------------------------
@@ -180,9 +129,6 @@ fn main() {
         Ok(v) => v,
         Err(e) => {
             eprintln!("[Sender] Pipeline error: {e}");
-            if args.virtual_display {
-                virtual_display::destroy_virtual_monitor();
-            }
             std::process::exit(1);
         }
     };
@@ -195,11 +141,10 @@ fn main() {
         .expect("[Sender] Failed to set pipeline to Playing");
 
     println!(
-        "[Sender] Streaming monitor {monitor_index} to {}:{} ({}x{} @ {}fps, {} kbps)",
+        "[Sender] Streaming monitor {} to {}:{} (@ {}fps, {} kbps)",
+        config.monitor_index,
         config.host,
         config.port,
-        config.width,
-        config.height,
         config.fps,
         config.bitrate / 1000,
     );
@@ -207,7 +152,6 @@ fn main() {
     // -- Ctrl+C handling ------------------------------------------------------
     let running = Arc::new(AtomicBool::new(true));
     let running_ctrlc = Arc::clone(&running);
-    let has_virtual = args.virtual_display;
 
     ctrlc::set_handler(move || {
         println!("\n[Sender] Ctrl+C received, shutting down ...");
@@ -220,7 +164,7 @@ fn main() {
         println!("[Sender] Test mode: streaming for 5 seconds ...");
         std::thread::sleep(std::time::Duration::from_secs(5));
         println!("[Sender] Test complete");
-        shutdown(&pipeline, has_virtual);
+        shutdown(&pipeline);
         return;
     }
 
@@ -272,18 +216,14 @@ fn main() {
         }
     }
 
-    shutdown(&pipeline, has_virtual);
+    shutdown(&pipeline);
 }
 
-fn shutdown(pipeline: &gst::Pipeline, has_virtual_display: bool) {
+fn shutdown(pipeline: &gst::Pipeline) {
     println!("[Sender] Stopping pipeline ...");
     pipeline
         .set_state(gst::State::Null)
         .expect("[Sender] Failed to set pipeline to Null");
-
-    if has_virtual_display {
-        virtual_display::destroy_virtual_monitor();
-    }
 
     println!("[Sender] Pipeline stopped. Goodbye.");
 }

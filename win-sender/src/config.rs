@@ -7,10 +7,6 @@ pub struct StreamConfig {
     pub port: u16,
     /// GStreamer monitor-index to capture.
     pub monitor_index: i32,
-    /// Horizontal resolution.
-    pub width: u32,
-    /// Vertical resolution.
-    pub height: u32,
     /// Frames per second.
     pub fps: u32,
     /// Target bitrate in bits/s.
@@ -38,10 +34,49 @@ impl Default for StreamConfig {
             host: "10.0.0.21".into(),
             port: 5004,
             monitor_index: 0,
-            width: 3840,
-            height: 2160,
             fps: 60,
             bitrate: 50_000_000,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn auto_bitrate_4k() {
+        assert_eq!(StreamConfig::auto_bitrate(3840, 2160), 50_000_000);
+    }
+
+    #[test]
+    fn auto_bitrate_1440p() {
+        assert_eq!(StreamConfig::auto_bitrate(2560, 1440), 30_000_000);
+    }
+
+    #[test]
+    fn auto_bitrate_1080p() {
+        assert_eq!(StreamConfig::auto_bitrate(1920, 1080), 15_000_000);
+    }
+
+    #[test]
+    fn auto_bitrate_720p() {
+        assert_eq!(StreamConfig::auto_bitrate(1280, 720), 15_000_000);
+    }
+
+    #[test]
+    fn auto_bitrate_above_1440p_below_4k() {
+        // 3440x1440 ultrawide — above 1440p threshold
+        assert_eq!(StreamConfig::auto_bitrate(3440, 1440), 30_000_000);
+    }
+
+    #[test]
+    fn default_config() {
+        let config = StreamConfig::default();
+        assert_eq!(config.host, "10.0.0.21");
+        assert_eq!(config.port, 5004);
+        assert_eq!(config.monitor_index, 0);
+        assert_eq!(config.fps, 60);
+        assert_eq!(config.bitrate, 50_000_000);
     }
 }

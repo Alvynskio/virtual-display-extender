@@ -12,7 +12,6 @@ use gstreamer::prelude::*;
 
 use crate::config::StreamConfig;
 use crate::pipeline;
-use crate::virtual_display;
 
 /// Generate a simple colored circle icon (16x16 RGBA).
 fn make_circle_icon(r: u8, g: u8, b: u8) -> Icon {
@@ -41,15 +40,11 @@ fn make_circle_icon(r: u8, g: u8, b: u8) -> Icon {
 
 pub struct TrayApp {
     config: StreamConfig,
-    use_virtual_display: bool,
 }
 
 impl TrayApp {
-    pub fn new(config: StreamConfig, use_virtual_display: bool) -> Self {
-        Self {
-            config,
-            use_virtual_display,
-        }
+    pub fn new(config: StreamConfig) -> Self {
+        Self { config }
     }
 
     pub fn run(self) {
@@ -63,11 +58,10 @@ impl TrayApp {
         let menu = Menu::new();
         let item_start = MenuItem::new("Start Streaming", true, None);
         let item_stop = MenuItem::new("Stop Streaming", false, None);
-        let item_kill = MenuItem::new("Kill Virtual Display", true, None);
         let item_settings = MenuItem::new(
             format!(
-                "Settings: {}x{} @ {}fps → {}",
-                self.config.width, self.config.height, self.config.fps, self.config.host,
+                "Settings: monitor {} @ {}fps → {}",
+                self.config.monitor_index, self.config.fps, self.config.host,
             ),
             false,
             None,
@@ -76,7 +70,6 @@ impl TrayApp {
 
         menu.append(&item_start).unwrap();
         menu.append(&item_stop).unwrap();
-        menu.append(&item_kill).unwrap();
         menu.append(&item_settings).unwrap();
         menu.append(&item_exit).unwrap();
 
@@ -97,7 +90,6 @@ impl TrayApp {
 
         let id_start = item_start.id().clone();
         let id_stop = item_stop.id().clone();
-        let id_kill = item_kill.id().clone();
         let id_exit = item_exit.id().clone();
 
         let menu_rx = MenuEvent::receiver().clone();
@@ -115,7 +107,6 @@ impl TrayApp {
                         let config = self.config.clone();
                         let streaming_clone = Arc::clone(&streaming);
                         let should_stop_clone = Arc::clone(&should_stop);
-                        let use_vd = self.use_virtual_display;
 
                         should_stop.store(false, Ordering::SeqCst);
                         streaming.store(true, Ordering::SeqCst);
@@ -127,7 +118,7 @@ impl TrayApp {
                         _tray.set_icon(Some(icon_yellow.clone())).ok();
 
                         thread::spawn(move || {
-                            run_streaming(config, use_vd, streaming_clone, should_stop_clone);
+                            run_streaming(config, streaming_clone, should_stop_clone);
                         });
 
                         // Update icon to green after a short delay.
@@ -138,10 +129,6 @@ impl TrayApp {
                     item_start.set_enabled(true);
                     item_stop.set_enabled(false);
                     _tray.set_icon(Some(icon_red.clone())).ok();
-                } else if event.id == id_kill {
-                    println!("[Tray] Killing virtual display ...");
-                    virtual_display::destroy_virtual_monitor();
-                    println!("[Tray] Virtual display killed");
                 } else if event.id == id_exit {
                     should_stop.store(true, Ordering::SeqCst);
                     // Give the streaming thread a moment to clean up.
@@ -169,31 +156,9 @@ impl TrayApp {
 /// Run the streaming pipeline in a background thread.
 fn run_streaming(
     config: StreamConfig,
-    use_virtual_display: bool,
     streaming: Arc<AtomicBool>,
     should_stop: Arc<AtomicBool>,
 ) {
-    // Create or reuse virtual display if requested.
-    let monitor_index = if use_virtual_display {
-        match virtual_display::create_or_reuse_virtual_monitor(
-            config.width,
-            config.height,
-            config.fps,
-        ) {
-            Ok(idx) => idx,
-            Err(e) => {
-                eprintln!("[Tray] Virtual display error: {e}");
-                streaming.store(false, Ordering::SeqCst);
-                return;
-            }
-        }
-    } else {
-        config.monitor_index
-    };
-
-    let mut config = config;
-    config.monitor_index = monitor_index;
-
     let (pipeline, description) = match pipeline::build_pipeline(&config) {
         Ok(v) => v,
         Err(e) => {
@@ -212,11 +177,10 @@ fn run_streaming(
     }
 
     println!(
-        "[Tray] Streaming monitor {monitor_index} to {}:{} ({}x{} @ {}fps, {} kbps)",
+        "[Tray] Streaming monitor {} to {}:{} (@ {}fps, {} kbps)",
+        config.monitor_index,
         config.host,
         config.port,
-        config.width,
-        config.height,
         config.fps,
         config.bitrate / 1000,
     );
@@ -248,10 +212,6 @@ fn run_streaming(
 
     println!("[Tray] Stopping pipeline ...");
     let _ = pipeline.set_state(gst::State::Null);
-
-    if use_virtual_display {
-        virtual_display::destroy_virtual_monitor();
-    }
 
     streaming.store(false, Ordering::SeqCst);
     println!("[Tray] Pipeline stopped");
